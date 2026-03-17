@@ -355,11 +355,11 @@ export default function HomePage() {
             ))}
           </nav>
 
-          <div className="flex items-center gap-3 lg:gap-5">
-            <a href="#contact" className="px-4 lg:px-8 py-2.5 lg:py-3.5 rounded-xl btn-cyber-outline font-outfit text-[11px] lg:text-[13px] tracking-wide transition-all">
+          <div className="flex items-center gap-2 lg:gap-5">
+            <a href="#contact" className="px-3 lg:px-8 py-2 lg:py-3.5 rounded-xl btn-cyber-outline font-outfit text-[10px] lg:text-[13px] tracking-wide transition-all whitespace-nowrap">
               PARTNERSHIP
             </a>
-            <a href="#contact" className="px-4 lg:px-8 py-2.5 lg:py-3.5 rounded-xl btn-gold font-outfit text-[11px] lg:text-[13px] tracking-wide transition-all shadow-xl">
+            <a href="#contact" className="px-3 lg:px-8 py-2 lg:py-3.5 rounded-xl btn-gold font-outfit text-[10px] lg:text-[13px] tracking-wide transition-all shadow-xl whitespace-nowrap">
               REQUEST DEMO
             </a>
           </div>
@@ -380,9 +380,9 @@ export default function HomePage() {
                 </div>
 
                 {/* HEADING FONT REFINED: Adjusted for mobile */}
-                <h1 className="text-[32px] lg:text-[60px] font-black mb-6 lg:mb-10 leading-[1.1] font-outfit text-white break-keep" style={{ wordBreak: 'keep-all' }}>
+                <h1 className="text-[30px] lg:text-[60px] font-black mb-6 lg:mb-10 leading-[1.2] lg:leading-[1.1] font-outfit text-white break-keep" style={{ wordBreak: 'keep-all' }}>
                   산업 안전 데이터를 <br className="hidden lg:block" />
-                  <span className="text-[#FFD700] drop-shadow-[0_0_25px_rgba(255,215,0,0.6)]">ESG 리스크 지표</span>로 <br className="hidden lg:block" />
+                  <span className="text-[#FFD700] drop-shadow-[0_0_25px_rgba(255,215,0,0.6)]">ESG 리스크 지표</span>로 <br className="hidden sm:block" />
                   전환합니다
                 </h1>
 
@@ -422,14 +422,14 @@ export default function HomePage() {
                     </div>
                   </div>
 
-                  <div className="mt-auto flex flex-col sm:flex-row gap-4 lg:gap-5 pb-4 text-center">
-                    <div className="flex-1 p-4 lg:p-6 rounded-3xl bg-black/80 backdrop-blur-2xl border border-white/15 shadow-2xl">
-                      <span className="text-[9px] lg:text-[10px] text-[#94A3B8] block mb-1 lg:mb-2 uppercase font-black tracking-[0.2em]">Total Satellites</span>
-                      <div id="total-sat-val" className="text-lg lg:text-xl font-black text-[#00F2FF] tracking-tight">15,000</div>
+                  <div className="mt-auto grid grid-cols-1 sm:grid-cols-2 gap-3 lg:gap-5 pb-4">
+                    <div className="p-3 lg:p-6 rounded-2xl bg-black/80 backdrop-blur-2xl border border-white/15 shadow-2xl text-center">
+                      <span className="text-[9px] lg:text-[10px] text-[#94A3B8] block mb-1 uppercase font-black tracking-[0.2em]">Total Satellites</span>
+                      <div id="total-sat-val" className="text-md lg:text-xl font-black text-[#00F2FF] tracking-tight">15,000</div>
                     </div>
-                    <div className="flex-1 p-4 lg:p-6 rounded-3xl bg-black/80 backdrop-blur-2xl border border-white/15 shadow-2xl border-l-[#FFD700]/40 pl-6 lg:pl-8">
-                      <span className="text-[9px] lg:text-[10px] text-[#FFD700] block mb-1 lg:mb-2 uppercase font-black tracking-[0.2em]">Starlink Links</span>
-                      <div id="active-links-val" className="text-lg lg:text-xl font-black text-[#FFD700] tracking-tight">4,281</div>
+                    <div className="p-3 lg:p-6 rounded-2xl bg-black/80 backdrop-blur-2xl border border-white/15 shadow-2xl border-l-[#FFD700]/40 pl-4 lg:pl-8 text-center">
+                      <span className="text-[9px] lg:text-[10px] text-[#FFD700] block mb-1 uppercase font-black tracking-[0.2em]">Starlink Links</span>
+                      <div id="active-links-val" className="text-md lg:text-xl font-black text-[#FFD700] tracking-tight">4,281</div>
                     </div>
                   </div>
                 </div>
