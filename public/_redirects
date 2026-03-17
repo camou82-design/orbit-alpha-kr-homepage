@@ -1,0 +1,4 @@
+/leader       /leader.html    200
+/admin/login  /admin.html     200
+/entry        /entry.html     200
+/*            /index.html     200

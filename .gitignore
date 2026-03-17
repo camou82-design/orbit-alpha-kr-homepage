@@ -1,0 +1,44 @@
+# dependencies
+node_modules/
+.pnp
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/versions
+
+# testing
+coverage/
+
+# next.js
+.next/
+out/
+
+# firebase
+.firebase/
+.firebaserc
+
+# debug and logs
+*.log
+*.txt
+build_full.log
+build_err*.log
+build_error*
+tsc_errors.txt
+verify_results.txt
+
+# data and output
+data/
+report.xlsx
+dump.txt
+
+# extra assets (Standalone Homepage)
+youtube-making/
+orbit game/
+backups/
+
+# etc
+antigravity-agents/
+.gemini/
+.idx/
