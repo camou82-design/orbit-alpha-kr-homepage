@@ -1,12 +1,89 @@
 "use client";
 
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
+import Link from 'next/link';
 import * as THREE from 'three';
-import { useRouter } from 'next/navigation';
+import { BlogAutomationSection } from '@/components/blog/BlogAutomationTool';
+import { ContactForm } from '@/components/ContactForm';
 
 export default function HomePage() {
   const canvasRef = useRef<HTMLDivElement>(null);
-  const router = useRouter();
+  const [jjContactOpen, setJjContactOpen] = useState(false);
+  const [insights, setInsights] = useState<Array<{ title: string; summary: string; meta: string; href: string }> | null>(
+    null,
+  );
+  const [insightsStatus, setInsightsStatus] = useState<"loading" | "rss" | "fallback">("loading");
+  const insightsBlogHome = "https://blog.orbitalpha.kr";
+  // Display-layer only: keep sections in code, hide if not needed.
+  const SHOW_PLATFORM_SECTION = false;
+
+  // Prevent browser scroll restoration and always start at top
+  useEffect(() => {
+    if ('scrollRestoration' in window.history) {
+      window.history.scrollRestoration = 'manual';
+    }
+    if (window.location.hash) {
+      window.history.replaceState(null, '', window.location.pathname);
+    }
+    window.scrollTo({ top: 0, left: 0, behavior: 'instant' });
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    const fallback = [
+      {
+        title: "금리 변화가 현장 비용에 먼저 찍히는 지점",
+        summary: "조달·인건비·대금 결제 흐름에서 먼저 체감되는 포인트를 짧게 정리합니다.",
+        meta: "브리핑 · 2026.03",
+        href: "https://blog.orbitalpha.kr",
+      },
+      {
+        title: "환율과 원자재: 숫자보다 '타이밍'이 중요한 이유",
+        summary: "가격 자체보다 발주/납기 타이밍이 리스크가 되는 구조를 사례로 풀어봅니다.",
+        meta: "인사이트 · 2026.03",
+        href: "https://blog.orbitalpha.kr",
+      },
+      {
+        title: "자동화의 출발점은 대시보드가 아니라 체크리스트",
+        summary: "작게 시작해도 효과가 나는 운영 자동화의 최소 단위를 제안합니다.",
+        meta: "워크플로우 · 2026.03",
+        href: "https://blog.orbitalpha.kr",
+      },
+    ];
+
+    (async () => {
+      try {
+        const res = await fetch("/api/financial-insights", { method: "GET" });
+        const json: any = await res.json().catch(() => ({}));
+        if (!res.ok || !json?.ok || !Array.isArray(json?.items) || json.items.length === 0) {
+          throw new Error(json?.error ?? "RSS 로딩 실패");
+        }
+        const items = json.items
+          .slice(0, 3)
+          .map((it: any) => ({
+            title: String(it.title ?? ""),
+            summary: String(it.summary ?? ""),
+            meta: String(it.meta ?? ""),
+            href: String(it.href ?? ""),
+          }))
+          .filter((it: any) => it.title && it.href);
+        if (!items.length) throw new Error("RSS 항목이 비어 있습니다.");
+        if (!cancelled) {
+          setInsights(items);
+          setInsightsStatus("rss");
+        }
+      } catch {
+        if (!cancelled) {
+          setInsights(fallback);
+          setInsightsStatus("fallback");
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     if (!canvasRef.current) return;
@@ -26,14 +103,16 @@ export default function HomePage() {
 
     const ACTIVE_SAT_COUNT = 350;
     const TOTAL_SAT_COUNT = 15000;
-    const MAX_CONNECT_DIST = 48;
+    // 모바일에서만(좁은 화면에서만) 지구/네트워크가 너무 커 보이는 문제 완화
+    const isMobile = window.innerWidth < 640;
+    const MAX_CONNECT_DIST = isMobile ? 42 : 48;
 
     scene = new THREE.Scene();
 
-    // SCALE REFINED: Increased FOV and Z-position slightly to shrink the globe visual by ~10%
-    camera = new THREE.PerspectiveCamera(44, width / height, 0.1, 1000);
-    camera.position.z = 350; // Increased from 320
-    camera.position.y = 35;
+    camera = new THREE.PerspectiveCamera(45, width / height, 0.1, 1000);
+    // 모바일에서 카메라를 더 뒤로 두어(=확대 감소) + 전체 모델을 스케일 축소
+    camera.position.z = isMobile ? 235 : 350;
+    camera.position.y = isMobile ? 10 : 35;
     camera.lookAt(0, 0, 0);
 
     renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
@@ -42,6 +121,12 @@ export default function HomePage() {
     container.appendChild(renderer.domElement);
 
     const loader = new THREE.TextureLoader();
+    // 전체 모델을 모바일에서 비례 축소(기존 대비 추가로 10~15% 정도 축소)
+    const modelScale = isMobile ? 0.72 : 1;
+    const modelGroup = new THREE.Group();
+    modelGroup.scale.setScalar(modelScale);
+    scene.add(modelGroup);
+
     const earthGeo = new THREE.SphereGeometry(80, 64, 64);
     const earthMat = new THREE.MeshPhongMaterial({
       map: loader.load('https://threejs.org/examples/textures/planets/earth_atmos_2048.jpg'),
@@ -51,7 +136,7 @@ export default function HomePage() {
       shininess: 20
     });
     earth = new THREE.Mesh(earthGeo, earthMat);
-    scene.add(earth);
+    modelGroup.add(earth);
 
     const atmoGeo = new THREE.SphereGeometry(82, 64, 64);
     const atmoMat = new THREE.MeshBasicMaterial({
@@ -61,7 +146,7 @@ export default function HomePage() {
       side: THREE.BackSide
     });
     const atmo = new THREE.Mesh(atmoGeo, atmoMat);
-    scene.add(atmo);
+    modelGroup.add(atmo);
 
     scene.add(new THREE.AmbientLight(0xFFFFFF, 0.5));
     const sun = new THREE.DirectionalLight(0xFFFFFF, 1.8);
@@ -89,7 +174,9 @@ export default function HomePage() {
       blending: THREE.AdditiveBlending
     });
     swarmPoints = new THREE.Points(swarmGeo, swarmMat);
-    scene.add(swarmPoints);
+    // 포인트 사이즈도 모바일에서 조금 더 컴팩트하게
+    if (isMobile) swarmPoints.material.size = 0.4;
+    modelGroup.add(swarmPoints);
 
     const activePos = [];
     for (let i = 0; i < ACTIVE_SAT_COUNT; i++) {
@@ -112,7 +199,8 @@ export default function HomePage() {
       blending: THREE.AdditiveBlending
     });
     satPoints = new THREE.Points(satGeo, satMat);
-    scene.add(satPoints);
+    if (isMobile) satPoints.material.size = 1.9;
+    modelGroup.add(satPoints);
 
     const lineMat = new THREE.LineBasicMaterial({
       color: 0xFFD700,
@@ -138,7 +226,7 @@ export default function HomePage() {
     lineGeo.setAttribute('position', satGeo.attributes.position);
     lineGeo.setIndex(lineIndices);
     constellationLines = new THREE.LineSegments(lineGeo, lineMat);
-    scene.add(constellationLines);
+    modelGroup.add(constellationLines);
 
     let animationId: number;
     const animateOrbit = () => {
@@ -208,36 +296,87 @@ export default function HomePage() {
           margin: 0;
         }
 
+        @media (max-width: 1023px) {
+          html {
+            scroll-snap-type: y proximity;
+            scroll-padding-top: 70px;
+          }
+
+          .mobile-fullscreen-panel {
+            scroll-snap-align: start;
+          }
+
+          .mobile-hero-panel {
+            min-height: calc(100svh - 70px);
+            justify-content: center;
+          }
+
+          .mobile-dashboard-panel {
+            min-height: 750px;
+            height: 750px !important;
+          }
+
+          #solutions,
+          #model,
+          #platform,
+          #contact {
+            min-height: 100svh;
+            scroll-snap-align: start;
+          }
+        }
+
+        /* 모바일(더 좁은 화면)에서만 지구/네트워크 비주얼이 답답하지 않게 축소 */
+        @media (max-width: 639px) {
+          .mobile-dashboard-panel {
+            min-height: 620px;
+            height: 620px !important;
+          }
+
+          /* 하단 스탯 패널(총 위성 / 스타링크)을 모바일에서 더 컴팩트하게 */
+          .mobile-dashboard-panel .absolute.bottom-10.left-4.right-4 {
+            transform: scale(0.82);
+            transform-origin: bottom center;
+          }
+        }
+
         .hero-card {
           background: rgba(13, 22, 45, 0.6);
           backdrop-filter: blur(32px);
           border: 1px solid rgba(255, 255, 255, 0.15);
           border-radius: 32px;
-<<<<<<< HEAD
-          padding: 56px 64px; /* SCALE REFINED: Reduced padding by ~10% */
-=======
-          padding: 32px 24px;
-          @media (min-width: 1024px) {
-            padding: 56px 64px;
-          }
->>>>>>> 3203d7be (feat: stabilize mobile responsive layout and fix contact form)
+          padding: 20px 18px;
           position: relative;
           overflow: hidden;
-          height: 100%;
+          min-height: calc(100svh - 70px);
           display: flex;
           flex-direction: column;
           justify-content: center;
           box-shadow: 0 50px 120px -30px rgba(0, 0, 0, 0.7);
         }
 
+        @media (min-width: 1024px) {
+          .hero-card {
+            padding: 56px 64px;
+            min-height: unset;
+            height: 100%;
+            justify-content: center;
+          }
+        }
+
         .dashboard-container {
           background: #020408;
           border-radius: 32px;
           border: 1px solid rgba(255, 255, 255, 0.15);
-          height: 100%;
+          height: 100svh !important;
           position: relative;
           overflow: hidden;
           box-shadow: 0 50px 120px -30px rgba(0, 0, 0, 0.7), 0 0 50px rgba(0, 242, 255, 0.05);
+        }
+
+        @media (min-width: 1024px) {
+          .dashboard-container {
+            height: 100% !important;
+          }
         }
 
         .glass-card {
@@ -350,86 +489,98 @@ export default function HomePage() {
           </div>
 
           <nav className="hidden lg:flex items-center gap-14">
-            {['OVERVIEW', 'RISK MODEL', 'PLATFORM', 'SOLUTIONS', 'CONTACT'].map((item) => (
-              <a key={item} href={`#${item.toLowerCase().replace(' ', '-')}`} className="nav-link">{item}</a>
+            {[
+              { label: 'OVERVIEW', href: '#overview' },
+              { label: 'OPERATIONS', href: '#model' },
+              { label: 'TOOLS', href: '/tools' },
+              { label: 'INSIGHTS', href: '#financial-insights' },
+              { label: 'CONTACT', href: '#contact' },
+            ].map((item) => (
+              <a key={item.label} href={item.href} className="nav-link">{item.label}</a>
             ))}
           </nav>
 
           <div className="flex items-center gap-2 lg:gap-5">
-            <a href="#contact" className="px-3 lg:px-8 py-2 lg:py-3.5 rounded-xl btn-cyber-outline font-outfit text-[10px] lg:text-[13px] tracking-wide transition-all whitespace-nowrap">
-              PARTNERSHIP
-            </a>
-            <a href="#contact" className="px-3 lg:px-8 py-2 lg:py-3.5 rounded-xl btn-gold font-outfit text-[10px] lg:text-[13px] tracking-wide transition-all shadow-xl whitespace-nowrap">
-              REQUEST DEMO
-            </a>
+            <button
+              onClick={() => document.getElementById('contact')?.scrollIntoView({ behavior: 'smooth' })}
+              className="hidden sm:inline-flex px-4 lg:px-8 py-2.5 lg:py-3.5 rounded-xl btn-cyber-outline font-outfit text-[11px] lg:text-[13px] tracking-wide transition-all cursor-pointer">
+              협업 문의
+            </button>
+            <button
+              onClick={() => document.getElementById('contact')?.scrollIntoView({ behavior: 'smooth' })}
+              className="px-3 sm:px-4 lg:px-8 py-2 sm:py-2.5 lg:py-3.5 rounded-xl btn-gold font-outfit text-[10px] sm:text-[11px] lg:text-[13px] tracking-wide transition-all shadow-xl whitespace-nowrap cursor-pointer">
+              문의하기
+            </button>
           </div>
         </div>
       </header>
 
       <main>
         {/* HERO SECTION - SCALE REFINED */}
-        <section id="overview" className="relative min-h-screen flex items-center pt-28 pb-16 lg:pt-36 lg:pb-28">
+        <section id="overview" className="relative flex items-start lg:items-center pt-[70px] sm:pt-[100px] lg:pt-36 pb-0 lg:pb-28">
           <div className="max-w-[1440px] mx-auto px-6 lg:px-10 w-full">
-            {/* GRID HEIGHT REFINED: Removed fixed height on mobile */}
-            <div className="grid lg:grid-cols-2 gap-10 lg:gap-16 items-stretch lg:h-[600px]">
+            <div className="grid lg:grid-cols-2 gap-0 sm:gap-4 lg:gap-16 items-stretch lg:h-[600px]">
 
               {/* Left Column: Text Content Card */}
-              <div className="hero-card">
-                <div className="flex items-center gap-3.5 text-[#00F2FF] text-[12px] font-black tracking-[0.3em] uppercase mb-6 lg:mb-10 font-outfit">
-                  <span className="purse-dot" /> Real-time Risk Engine
+              <div className="hero-card mobile-fullscreen-panel mobile-hero-panel">
+                <div className="flex items-center gap-3.5 text-[#00F2FF] text-[12px] font-black tracking-[0.3em] uppercase mb-3 lg:mb-10 font-outfit">
+                  <span className="purse-dot" /> Field Operations Suite
                 </div>
 
-                {/* HEADING FONT REFINED: Adjusted for mobile */}
-                <h1 className="text-[30px] lg:text-[60px] font-black mb-6 lg:mb-10 leading-[1.2] lg:leading-[1.1] font-outfit text-white break-keep" style={{ wordBreak: 'keep-all' }}>
-                  산업 안전 데이터를 <br className="hidden lg:block" />
-                  <span className="text-[#FFD700] drop-shadow-[0_0_25px_rgba(255,215,0,0.6)]">ESG 리스크 지표</span>로 <br className="hidden sm:block" />
-                  전환합니다
+                <h1 className="text-[28px] lg:text-[60px] font-black mb-4 lg:mb-10 leading-[1.15] font-outfit text-white break-keep" style={{ wordBreak: 'keep-all' }}>
+                  현장 데이터를 기반으로 <br className="hidden lg:block" />
+                  <span className="text-[#FFD700] drop-shadow-[0_0_25px_rgba(255,215,0,0.6)]">운영과 리스크</span>를 <br className="hidden lg:block" />
+                  관리합니다
                 </h1>
 
-                <p className="text-[16px] lg:text-[18px] text-[#94A3B8] leading-[1.8] mb-8 lg:mb-12 max-w-[540px] font-medium">
-                  <b>OrbitAlpha</b>는 산업 현장 운영 데이터를 실시간 분석하여 기업의 ESG 리스크를 정량화하는 고도화된 인텔리전스 인프라를 제공합니다.
+                <p className="text-[14px] lg:text-[18px] text-[#94A3B8] leading-[1.7] mb-5 lg:mb-12 max-w-[540px] font-medium">
+                  <b>OrbitAlpha</b>는 현장에서 쌓이는 작업·인력·자재 흐름 데이터를 한 화면에서 정리하고, 이상 신호와 운영 리스크를 빠르게 점검할 수 있는 실무 도구를 제공합니다.
                 </p>
 
-                <div className="flex flex-wrap gap-4 lg:gap-6 mb-8 lg:mb-12">
-                  <a href="#contact" className="flex-1 lg:flex-none px-6 lg:px-10 py-4 lg:py-5 rounded-xl btn-gold text-[14px] lg:text-[15px] transition-all text-center">
-                    데모 요청하기
-                  </a>
-                  <a href="#model" className="flex-1 lg:flex-none px-6 lg:px-10 py-4 lg:py-5 rounded-xl bg-[#121C37] border border-white/15 text-white text-[14px] lg:text-[15px] font-black hover:bg-[#1a284e] transition-all text-center">
-                    기술 백서 보기
-                  </a>
+                <div className="flex flex-wrap gap-3 lg:gap-6 mb-4 lg:mb-12">
+                  <button
+                    onClick={() => document.getElementById('contact')?.scrollIntoView({ behavior: 'smooth' })}
+                    className="flex-1 lg:flex-none px-6 lg:px-10 py-3 lg:py-5 rounded-xl btn-gold text-[13px] lg:text-[15px] transition-all text-center">
+                    운영 문의
+                  </button>
+                  <button
+                    onClick={() => document.getElementById('model')?.scrollIntoView({ behavior: 'smooth' })}
+                    className="flex-1 lg:flex-none px-6 lg:px-10 py-3 lg:py-5 rounded-xl bg-[#121C37] border border-white/15 text-white text-[13px] lg:text-[15px] font-black hover:bg-[#1a284e] transition-all text-center">
+                    자세히 보기
+                  </button>
                 </div>
 
-                <div className="flex flex-wrap gap-3 lg:gap-6">
-                  <span className="tag-status">SRS Index 0-100</span>
-                  <span className="tag-status">Shock & Recovery Logic</span>
+                <div className="flex flex-wrap gap-2 lg:gap-6">
+                  <span className="tag-status">Field Workflow</span>
+                  <span className="tag-status">Risk Checklist</span>
                 </div>
               </div>
 
               {/* Right Column: Globe Dashboard Card */}
-              <div className="dashboard-container h-[400px] lg:h-full">
+              <div className="dashboard-container mobile-fullscreen-panel mobile-dashboard-panel lg:h-full">
                 <div ref={canvasRef} className="absolute inset-0" />
 
-                <div className="relative z-10 p-6 lg:p-10 flex flex-col h-full pointer-events-none">
-                  <div className="flex justify-between items-start">
-                    <div className="bg-black/65 backdrop-blur-2xl p-4 lg:p-6 rounded-3xl border border-white/10 shadow-2xl">
-                      <span className="text-[9px] lg:text-[10px] text-[#94A3B8] tracking-[0.3em] block mb-1 lg:mb-2 font-black uppercase">SRS · Risk Score</span>
-                      <strong id="live-srs" className="text-3xl lg:text-5xl font-black text-[#FFD700] drop-shadow-[0_0_25px_rgba(255,215,0,0.6)] italic tracking-tighter">
-                        82.4
-                      </strong>
-                    </div>
-                    <div className="px-3 lg:px-5 py-1.5 lg:py-2.2 rounded-full bg-[#00F2FF]/20 border border-[#00F2FF]/50 text-[#00F2FF] text-[8px] lg:text-[10px] font-black tracking-[0.25em] flex items-center gap-2 lg:gap-3 backdrop-blur-lg shadow-lg">
-                      <span className="pulse-dot" /> ORBITAL LIVE
-                    </div>
+                <div className="relative z-10 p-4 lg:p-10 flex flex-col h-full pointer-events-none">
+                  {/* SRS Card - Top Left */}
+                  <div className="absolute top-6 left-6 bg-black/70 backdrop-blur-2xl p-3 lg:p-6 rounded-[20px] border border-white/10 shadow-2xl z-20">
+                    <span className="text-[7px] lg:text-[10px] text-[#94A3B8] tracking-[0.3em] block mb-1 lg:mb-2 font-black uppercase">SRS · Risk Score</span>
+                    <strong id="live-srs" className="text-xl lg:text-5xl font-black text-[#FFD700] drop-shadow-[0_0_20px_rgba(255,215,0,0.5)] italic tracking-tighter">82.4</strong>
                   </div>
 
-                  <div className="mt-auto grid grid-cols-1 sm:grid-cols-2 gap-3 lg:gap-5 pb-4">
-                    <div className="p-3 lg:p-6 rounded-2xl bg-black/80 backdrop-blur-2xl border border-white/15 shadow-2xl text-center">
-                      <span className="text-[9px] lg:text-[10px] text-[#94A3B8] block mb-1 uppercase font-black tracking-[0.2em]">Total Satellites</span>
-                      <div id="total-sat-val" className="text-md lg:text-xl font-black text-[#00F2FF] tracking-tight">15,000</div>
+                  {/* Orbital Live Dot - Top Right */}
+                  <div className="absolute top-6 right-6 px-3 lg:px-5 py-1.5 lg:py-2.2 rounded-full bg-[#00F2FF]/20 border border-[#00F2FF]/50 text-[#00F2FF] text-[8px] lg:text-[10px] font-black tracking-[0.25em] flex items-center gap-2 lg:gap-3 backdrop-blur-lg shadow-lg z-20">
+                    <span className="pulse-dot" /> ORBITAL LIVE
+                  </div>
+
+                  {/* Bottom Row Statistics - Absolute Positioning for "Solid" feel */}
+                  <div className="absolute bottom-10 left-4 right-4 grid grid-cols-2 gap-3 lg:gap-5 text-center">
+                    <div className="p-3 lg:p-6 rounded-[22px] bg-black/85 backdrop-blur-2xl border border-white/15 shadow-2xl flex flex-col justify-center">
+                      <span className="text-[7px] lg:text-[10px] text-[#94A3B8] block mb-0.5 lg:mb-2 uppercase font-black tracking-[0.1em]">Total Satellites</span>
+                      <div id="total-sat-val" className="text-[12px] lg:text-xl font-black text-[#00F2FF] tracking-tight">15,000</div>
                     </div>
-                    <div className="p-3 lg:p-6 rounded-2xl bg-black/80 backdrop-blur-2xl border border-white/15 shadow-2xl border-l-[#FFD700]/40 pl-4 lg:pl-8 text-center">
-                      <span className="text-[9px] lg:text-[10px] text-[#FFD700] block mb-1 uppercase font-black tracking-[0.2em]">Starlink Links</span>
-                      <div id="active-links-val" className="text-md lg:text-xl font-black text-[#FFD700] tracking-tight">4,281</div>
+                    <div className="p-3 lg:p-6 rounded-[22px] bg-black/85 backdrop-blur-2xl border border-white/15 shadow-2xl border-l-[#FFD700]/40 flex flex-col justify-center">
+                      <span className="text-[7px] lg:text-[10px] text-[#FFD700] block mb-0.5 lg:mb-2 uppercase font-black tracking-[0.1em]">Starlink Links</span>
+                      <div id="active-links-val" className="text-[12px] lg:text-xl font-black text-[#FFD700] tracking-tight">4,281</div>
                     </div>
                   </div>
                 </div>
@@ -443,29 +594,58 @@ export default function HomePage() {
         <section id="solutions" className="py-16 lg:py-32">
           <div className="max-w-[1440px] mx-auto px-6 lg:px-10">
             <div className="text-center mb-12 lg:mb-20">
-              <div className="text-[#00F2FF] text-[12px] font-black tracking-[0.3em] uppercase mb-4 font-outfit">Solutions</div>
-              <h2 className="text-[28px] lg:text-[42px] font-black font-outfit mb-6">Shift to Dynamic Intelligence</h2>
-              <p className="text-[#94A3B8] max-w-[700px] mx-auto text-[16px] lg:text-[18px]">정체된 세상을 바꾸는 실시간 산업 안전 리스크 엔진.</p>
+              <div className="text-[#00F2FF] text-[12px] font-black tracking-[0.3em] uppercase mb-4 font-outfit">Operations</div>
+              <h2 className="text-[28px] lg:text-[42px] font-black font-outfit mb-6">현장 운영을 ‘한 화면’으로 정리합니다</h2>
+              <p className="text-[#94A3B8] max-w-[760px] mx-auto text-[16px] lg:text-[18px]">
+                작업·인력·자재 흐름을 정돈하고, 운영 리스크를 체크리스트처럼 빠르게 점검할 수 있게 만듭니다.
+              </p>
             </div>
 
             <div className="grid md:grid-cols-2 gap-8">
               <div className="glass-card">
-                <div className="text-[#FFD700] font-black mb-6 uppercase tracking-widest">[ Problem ]</div>
-                <h3 className="text-[24px] font-bold mb-6 font-outfit">정체된 ESG 평가 시스템</h3>
+                <div className="text-[#FFD700] font-black mb-6 uppercase tracking-widest">[ Reality ]</div>
+                <h3 className="text-[24px] font-bold mb-6 font-outfit">현장 운영 데이터는 흩어져 있습니다</h3>
                 <p className="text-[#94A3B8] leading-8 text-[16px]">
-                  • 연 1회 보고 중심의 사후 처리<br />
-                  • 사실 확인이 어려운 설문 기반 데이터<br />
-                  • 돌발 사고의 영향력이 즉각 반영되지 않음
+                  • 작업·투입·정리 기록이 사람/채널별로 분산<br />
+                  • 진행 상황을 “감”으로 공유해 누락이 생김<br />
+                  • 문제는 늦게 발견되어 일정·비용으로 이어짐
                 </p>
               </div>
-              <div className="glass-card shadow-[0_0_50px_rgba(0,242,255,0.05)] border-[#00F2FF]/20">
-                <div className="text-[#00F2FF] font-black mb-6 uppercase tracking-widest">[ Solution ]</div>
-                <h3 className="text-[24px] font-bold mb-6 font-outfit">OrbitAlpha Dynamic Scoring</h3>
-                <p className="text-[#94A3B8] leading-8 text-[16px]">
-                  • 산업 현장 신호를 기반으로 실시간 SRS 산출<br />
-                  • 사고 충격(Shock)과 개선 회복(Recovery)의 정량화<br />
-                  • 금융 및 공급망 의사결정에 즉시 활용 가능
-                </p>
+              <div className="glass-card relative overflow-hidden shadow-[0_0_55px_rgba(0,242,255,0.08)] border-[#00F2FF]/20 bg-[radial-gradient(circle_at_top_right,rgba(0,242,255,0.14),transparent_36%),linear-gradient(135deg,rgba(18,28,55,0.96),rgba(8,13,28,0.96))]">
+                <div className="absolute inset-0 pointer-events-none opacity-40 bg-[linear-gradient(rgba(255,255,255,0.03)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.03)_1px,transparent_1px)] bg-[size:26px_26px]" />
+                <div className="absolute inset-x-8 top-0 h-px bg-gradient-to-r from-transparent via-[#00F2FF]/35 to-transparent pointer-events-none" />
+
+                <div className="relative z-10 flex h-full flex-col justify-between gap-7">
+                  <div>
+                    <h3 className="text-[30px] leading-[1.18] font-black mb-4 font-outfit text-white">
+                      현장 공구·자재 전문관
+                    </h3>
+                    <p className="text-[#CBD5E1] leading-7 text-[16px] font-medium max-w-[520px]">
+                      오늘 필요한 현장 상황부터 업종 카테고리, 추천 기준 품목까지 한 흐름으로 보여드립니다.
+                    </p>
+                  </div>
+
+                  <div className="flex flex-wrap gap-2.5">
+                    {['건설 기본용품', '형틀', '전기', '설비', '해체정리', '시스템 비계'].map((item, index) => (
+                      <span
+                        key={item}
+                        className={`rounded-full border px-3.5 py-2 text-[12px] font-black tracking-[0.06em] ${
+                          index % 3 === 1
+                            ? 'border-[#FFD700]/25 bg-[#1a1406]/70 text-[#FFD700]'
+                            : 'border-[#00F2FF]/20 bg-[#0d1729]/75 text-[#BDF8FF]'
+                        }`}
+                      >
+                        {item}
+                      </span>
+                    ))}
+                  </div>
+
+                  <div className="flex flex-wrap gap-3 pt-1">
+                    <div className="px-5 py-3 rounded-xl border border-white/10 bg-white/5 text-white/70 text-[14px] font-black tracking-wide">
+                      점검 중
+                    </div>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
@@ -475,27 +655,100 @@ export default function HomePage() {
         <section id="model" className="py-16 lg:py-32 bg-white/5">
           <div className="max-w-[1440px] mx-auto px-6 lg:px-10">
             <div className="text-center mb-12 lg:mb-20">
-              <div className="text-[#00F2FF] text-[12px] font-black tracking-[0.3em] uppercase mb-4 font-outfit">The Model</div>
-              <h2 className="text-[28px] lg:text-[42px] font-black font-outfit mb-6">핵심 기술 지표</h2>
-              <p className="text-[#94A3B8] max-w-[700px] mx-auto text-[16px] lg:text-[18px]">실시간 알고리즘을 통한 정교한 리스크 측정 인프라.</p>
+              <div className="text-[#00F2FF] text-[12px] font-black tracking-[0.3em] uppercase mb-4 font-outfit">Field Management</div>
+              <h2 className="text-[28px] lg:text-[42px] font-black font-outfit mb-6">현장 운영 관리</h2>
+              <p className="text-[#94A3B8] max-w-[700px] mx-auto text-[16px] lg:text-[18px]">소규모 건설업체의 인력, 노무비, 작업 흐름을 한눈에 관리합니다.</p>
             </div>
 
             <div className="grid lg:grid-cols-4 gap-6">
               <div
-                className="glass-card flex flex-col items-center text-center py-12 px-8 cursor-pointer group"
-                onClick={() => router.push('/entry')}
+                role="link"
+                tabIndex={0}
+                onClick={() => {
+                  window.location.href = '/jj';
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') window.location.href = '/jj';
+                }}
+                className="glass-card flex flex-col items-center text-center py-12 px-8 cursor-pointer group block"
               >
-                <h3 className="text-[22px] font-extrabold mb-8 font-outfit text-[#00F2FF] tracking-tight group-hover:text-[#FFD700] transition-colors">JJ형틀해체정리</h3>
-                <div className="flex flex-col space-y-4 mb-10 text-[#CBD5E1] text-[15px] leading-relaxed font-medium">
-                  <p>형틀 해체 및 정리 작업 지원</p>
-                  <p>현장 인력 투입 및 작업 보조</p>
-                  <p>자재 이동·반출·적치 정리</p>
-                  <p>작업 마감 정리 및 신속 대응</p>
+                <div className="text-[11px] font-black uppercase tracking-[0.22em] text-[#94A3B8] mb-4">
+                  OPERATION SUPPORT
                 </div>
-                <div className="mt-auto pt-6 border-t border-white/10 w-full flex flex-col items-center">
-                  <div className="text-[14px] font-bold text-white tracking-wide">
-                    문의 <span className="text-[#FFD700] ml-1">010-9573-2510</span>
+
+                <h3 className="text-[22px] font-extrabold mb-3 font-outfit text-[#00F2FF] tracking-tight group-hover:text-[#FFD700] transition-colors">
+                  JJ형틀해체정리
+                </h3>
+                <p className="text-[#94A3B8] text-[14px] leading-relaxed mb-8 font-medium">
+                  형틀 해체·정리 작업 운영 지원 시스템
+                </p>
+
+                <div className="w-full flex flex-col items-start gap-4 mb-10">
+                  <div className="flex items-start gap-3 w-full">
+                    <span className="w-2.5 h-2.5 rounded-full bg-[#00F2FF] mt-2 shadow-[0_0_14px_rgba(0,242,255,0.55)]" />
+                    <div className="text-[#CBD5E1] text-[15px] leading-relaxed font-medium text-left">
+                      인력 투입 및 작업 흐름 운영
+                    </div>
                   </div>
+                  <div className="flex items-start gap-3 w-full">
+                    <span className="w-2.5 h-2.5 rounded-full bg-[#FFD700] mt-2 shadow-[0_0_14px_rgba(255,215,0,0.35)]" />
+                    <div className="text-[#CBD5E1] text-[15px] leading-relaxed font-medium text-left">
+                      자재 이동·반출·정리 지원
+                    </div>
+                  </div>
+                  <div className="flex items-start gap-3 w-full">
+                    <span className="w-2.5 h-2.5 rounded-full bg-white/70 mt-2 shadow-[0_0_12px_rgba(255,255,255,0.18)]" />
+                    <div className="text-[#CBD5E1] text-[15px] leading-relaxed font-medium text-left">
+                      마감 정리 및 현장 대응 추적
+                    </div>
+                  </div>
+                </div>
+
+                <div className="mt-auto pt-6 border-t border-white/10 w-full flex flex-col items-center gap-4">
+                  <div className="w-full flex items-center justify-between">
+                  <div className="text-[11px] font-bold text-[#94A3B8] tracking-wide">
+                    OrbitAlpha 운영 솔루션
+                  </div>
+                  <div className="px-4 py-2 rounded-xl border border-[#00F2FF]/35 bg-[#0b1526] text-[#00F2FF] text-[12px] font-black tracking-wide hover:bg-[#12203a] transition-all">
+                    운영 보기
+                  </div>
+                  </div>
+
+                  <div className="w-full flex flex-wrap items-center justify-center gap-x-4 gap-y-2">
+                    <a
+                      href="#contact"
+                      className="text-[#94A3B8] text-[12px] font-bold tracking-wide hover:text-[#00F2FF] transition-colors cursor-pointer"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                      }}
+                    >
+                      문의하기
+                    </a>
+
+                    <button
+                      type="button"
+                      className="text-[#CBD5E1] text-[12px] font-bold tracking-wide hover:text-[#FFD700] transition-colors cursor-pointer underline decoration-white/15 hover:decoration-white/40"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setJjContactOpen((v) => !v);
+                      }}
+                    >
+                      카카오 상담 또는 연락 안내
+                    </button>
+                  </div>
+
+                  {jjContactOpen && (
+                    <div className="w-full text-center text-[11px] text-[#CBD5E1] leading-relaxed">
+                      <span className="text-[#94A3B8] font-bold">연락:</span>{' '}
+                      <a
+                        href="tel:01095732510"
+                        onClick={(e) => e.stopPropagation()}
+                        className="text-[#00F2FF] font-bold hover:text-[#FFD700] transition-colors underline decoration-white/10 hover:decoration-white/35"
+                      >
+                        010-9573-2510
+                      </a>
+                    </div>
+                  )}
                 </div>
               </div>
               <div className="glass-card">
@@ -522,32 +775,132 @@ export default function HomePage() {
               </div>
             </div>
 
-            <div className="grid md:grid-cols-3 gap-8 mt-16">
-              <div className="step-box">
-                <span className="step-num">01</span>
-                <h3 className="text-[20px] font-bold mb-4 font-outfit">Data Ingestion</h3>
-                <p className="text-[#94A3B8] text-[15px] leading-relaxed">사고 기록, 점검 데이터, 교육 이행률 등 현장 실시간 데이터를 수집합니다.</p>
+            <BlogAutomationSection />
+          </div>
+        </section>
+
+        {/* PLATFORM SECTION (kept in code, optionally hidden) */}
+        {SHOW_PLATFORM_SECTION ? (
+          <section id="platform" className="py-10 sm:py-20 flex justify-center overflow-hidden">
+            <div className="flex gap-2 sm:gap-4 items-center px-4">
+              <div className="w-[30px] sm:w-[80px] h-[2px] bg-[#00F2FF]/20 flex-shrink-0"></div>
+              <div className="text-center font-outfit font-black text-white/10 text-2xl sm:text-4xl lg:text-6xl tracking-widest whitespace-nowrap">INFRASTRUCTURE</div>
+              <div className="w-[30px] sm:w-[80px] h-[2px] bg-[#00F2FF]/20 flex-shrink-0"></div>
+            </div>
+          </section>
+        ) : null}
+
+        {/* FINANCIAL INSIGHTS SECTION */}
+        <section id="financial-insights" className="py-16 lg:py-28">
+          <div className="max-w-[1440px] mx-auto px-6 lg:px-10">
+            <div className="text-center mb-10 lg:mb-14">
+              <div className="text-[#00F2FF] text-[12px] font-black tracking-[0.3em] uppercase mb-4 font-outfit">FINANCIAL INSIGHTS</div>
+              <h2 className="text-[28px] lg:text-[42px] font-black font-outfit mb-5">디지털 금융 자동화 연구소</h2>
+              <p className="text-[#94A3B8] max-w-[760px] mx-auto text-[16px] lg:text-[18px]">
+                시장 흐름과 자동화 관점에서 정리한 실전형 경제 브리핑
+              </p>
+              <div className="mt-4 text-[11px] font-bold tracking-[0.22em] uppercase text-white/25">
+                {insightsStatus === "rss"
+                  ? "RSS · LIVE"
+                  : insightsStatus === "fallback"
+                    ? "RSS · FALLBACK"
+                    : "RSS · CHECKING"}
               </div>
-              <div className="step-box border-[#00F2FF]/30">
-                <span className="step-num">02</span>
-                <h3 className="text-[20px] font-bold mb-4 font-outfit text-[#00F2FF]">Quantification</h3>
-                <p className="text-[#94A3B8] text-[15px] leading-relaxed">수집된 데이터를 OrbitAlpha 리스크 엔진을 거쳐 SRS 점수로 변환합니다.</p>
-              </div>
-              <div className="step-box">
-                <span className="step-num">03</span>
-                <h3 className="text-[20px] font-bold mb-4 font-outfit">Intelligence</h3>
-                <p className="text-[#94A3B8] text-[15px] leading-relaxed">점수화된 데이터를 보험 요율 산정, 투자 필터링, 대시보드로 시각화합니다.</p>
-              </div>
+            </div>
+
+            <div className="grid md:grid-cols-3 gap-6 lg:gap-8">
+              {(insights ?? []).map((post) => (
+                <a
+                  key={post.href}
+                  href={post.href}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="glass-card group text-left block hover:border-[#00F2FF]/25"
+                >
+                  <div className="text-[11px] font-black uppercase tracking-[0.22em] text-[#94A3B8] mb-4">
+                    {post.meta}
+                  </div>
+                  <h3 className="text-[20px] font-extrabold mb-3 font-outfit text-white group-hover:text-[#00F2FF] transition-colors leading-snug">
+                    {post.title}
+                  </h3>
+                  <p className="text-[#94A3B8] text-[14px] leading-relaxed font-medium">
+                    {post.summary}
+                  </p>
+                  <div className="mt-7 flex items-center justify-between border-t border-white/10 pt-5">
+                    <span className="text-[11px] font-bold text-[#64748B] tracking-wide">TISTORY</span>
+                    <span className="text-[12px] font-black text-[#00F2FF]/90 tracking-wide group-hover:text-[#FFD700] transition-colors">
+                      읽어보기 →
+                    </span>
+                  </div>
+                </a>
+              ))}
+            </div>
+
+            <div className="mt-10 lg:mt-12 flex justify-center">
+              <a
+                href={insightsBlogHome}
+                target="_blank"
+                rel="noreferrer"
+                className="px-6 py-3 rounded-xl border border-[#00F2FF]/35 bg-[#0b1526] text-[#00F2FF] text-[14px] font-black tracking-wide hover:bg-[#12203a] transition-all text-center"
+              >
+                블로그 바로가기 →
+              </a>
             </div>
           </div>
         </section>
 
-        {/* PLATFORM SECTION */}
-        <section id="platform" className="py-20 flex justify-center">
-          <div className="flex gap-4">
-            <div className="w-[80px] h-[2px] bg-[#00F2FF]/20 mt-4"></div>
-            <div className="text-center font-outfit font-black text-white/10 text-6xl tracking-widest">INFRASTRUCTURE</div>
-            <div className="w-[80px] h-[2px] bg-[#00F2FF]/20 mt-4"></div>
+        {/* PUBLIC PROJECTS / FIELD PILOTS */}
+        <section id="public-projects" className="py-16 lg:py-28 bg-white/5">
+          <div className="max-w-[1440px] mx-auto px-6 lg:px-10">
+            <div className="text-center mb-10 lg:mb-14">
+              <div className="text-[#00F2FF] text-[12px] font-black tracking-[0.3em] uppercase mb-4 font-outfit">
+                공공 프로젝트 / 실증 사례
+              </div>
+              <h2 className="text-[28px] lg:text-[42px] font-black font-outfit mb-5">
+                현장 적용 프로젝트 아카이브
+              </h2>
+              <p className="text-[#94A3B8] max-w-[860px] mx-auto text-[16px] lg:text-[18px]">
+                현장 데이터와 운영 구조를 바탕으로 지역·공공 현장에 적용 가능한 프로젝트를 실증 형태로 정리하고 있습니다.
+              </p>
+            </div>
+
+            <div className="grid md:grid-cols-2 gap-6 lg:gap-8">
+              <Link
+                href="/tools/buan-vacant-report"
+                className="glass-card group text-left block hover:border-[#00F2FF]/25"
+              >
+                <div className="text-[11px] font-black uppercase tracking-[0.22em] text-[#94A3B8] mb-4">
+                  FIELD PILOT · BUAN
+                </div>
+                <h3 className="text-[22px] font-extrabold mb-3 font-outfit text-white group-hover:text-[#00F2FF] transition-colors leading-snug">
+                  부안 빈집 활용 운영 프로젝트
+                </h3>
+                <p className="text-[#94A3B8] text-[14px] leading-relaxed font-medium max-w-[700px]">
+                  농촌 빈집과 유휴시설을 대상으로 현장 점검, 운영 데이터 정리, 활용 가능성 검토를 연결하는 실증형 프로젝트입니다.
+                </p>
+                <div className="mt-7 flex items-center justify-between border-t border-white/10 pt-5">
+                  <span className="text-[11px] font-bold text-[#64748B] tracking-wide">PUBLIC PILOT</span>
+                  <span className="px-4 py-2 rounded-xl border border-[#00F2FF]/35 bg-[#0b1526] text-[#00F2FF] text-[12px] font-black tracking-wide hover:bg-[#12203a] transition-all">
+                    프로젝트 보기
+                  </span>
+                </div>
+              </Link>
+
+              <div className="glass-card text-left border-white/10 bg-[#121C37]">
+                <div className="text-[11px] font-black uppercase tracking-[0.22em] text-[#94A3B8] mb-4">
+                  FIELD PILOT · NEXT
+                </div>
+                <h3 className="text-[22px] font-extrabold mb-3 font-outfit text-white leading-snug">
+                  추가 실증 프로젝트 준비 중
+                </h3>
+                <p className="text-[#94A3B8] text-[14px] leading-relaxed font-medium max-w-[700px]">
+                  지역·공공 현장의 운영 데이터 구조를 바탕으로, 점검·정리·추적 흐름을 확장해나가고 있습니다.
+                </p>
+                <div className="mt-7 border-t border-white/10 pt-5 text-[12px] font-bold text-[#64748B]">
+                  업데이트 예정
+                </div>
+              </div>
+            </div>
           </div>
         </section>
 
@@ -590,38 +943,7 @@ export default function HomePage() {
                 </div>
               </div>
 
-              <div className="bg-white/5 border border-white/10 rounded-[32px] p-6 lg:p-10 backdrop-blur-3xl shadow-2xl">
-                <form className="space-y-6">
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
-                    <div>
-                      <label className="text-[11px] font-black text-[#94A3B8] uppercase tracking-widest mb-3 block">회사명</label>
-                      <input type="text" placeholder="예: HSE&C" className="w-full bg-black/50 border border-white/10 rounded-xl px-5 py-4 focus:border-[#00F2FF]/50 transition-all outline-none" />
-                    </div>
-                    <div>
-                      <label className="text-[11px] font-black text-[#94A3B8] uppercase tracking-widest mb-3 block">성함/담당자</label>
-                      <input type="text" placeholder="홍길동 팀장" className="w-full bg-black/50 border border-white/10 rounded-xl px-5 py-4 focus:border-[#00F2FF]/50 transition-all outline-none" />
-                    </div>
-                  </div>
-                  <div>
-                    <label className="text-[11px] font-black text-[#94A3B8] uppercase tracking-widest mb-3 block">이메일</label>
-                    <input type="email" placeholder="contact@company.com" className="w-full bg-black/50 border border-white/10 rounded-xl px-5 py-4 focus:border-[#00F2FF]/50 transition-all outline-none" />
-                  </div>
-                  <div>
-                    <label className="text-[11px] font-black text-[#94A3B8] uppercase tracking-widest mb-3 block">관심 분야</label>
-                    <select className="w-full bg-black/50 border border-white/10 rounded-xl px-5 py-4 focus:border-[#00F2FF]/50 transition-all outline-none appearance-none cursor-pointer">
-                      <option>Supply Chain ESG</option>
-                      <option>Insurance Risk Pricing</option>
-                      <option>Investment Screening</option>
-                      <option>Strategic Partnership</option>
-                    </select>
-                  </div>
-                  <div>
-                    <label className="text-[11px] font-black text-[#94A3B8] uppercase tracking-widest mb-3 block">문의 메세지</label>
-                    <textarea rows={4} placeholder="문의하실 내용을 입력해주세요." className="w-full bg-black/50 border border-white/10 rounded-xl px-5 py-4 focus:border-[#00F2FF]/50 transition-all outline-none resize-none"></textarea>
-                  </div>
-                  <button type="submit" className="w-full py-5 rounded-2xl btn-gold text-[16px] font-black tracking-widest uppercase transition-all">문의 보내기</button>
-                </form>
-              </div>
+              <ContactForm />
             </div>
           </div>
         </section>
@@ -640,6 +962,6 @@ export default function HomePage() {
           </div>
         </div>
       </footer>
-    </div>
+    </div >
   );
 }

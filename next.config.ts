@@ -5,6 +5,15 @@ const nextConfig: NextConfig = {
   typescript: {
     ignoreBuildErrors: true,
   },
+  async redirects() {
+    return [
+      {
+        source: "/jj",
+        destination: "https://jj.orbitalpha.kr",
+        permanent: false,
+      },
+    ];
+  },
 };
 
 export default nextConfig;
