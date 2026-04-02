@@ -17,7 +17,8 @@ export async function POST(req: Request) {
   // Homepage-only admin login (namespaced cookie: homepage_admin_auth).
   // Intentionally NOT shared with JJ/trading admin auth to avoid cross-service coupling.
   // Password: HOMEPAGE_ADMIN_PASSWORD in env (see .env.example). Local fallback only if unset.
-  const expected = (process.env.HOMEPAGE_ADMIN_PASSWORD ?? "955104").trim();
+  // Use || so empty-string env (common in dashboards) still falls back to default.
+  const expected = (process.env.HOMEPAGE_ADMIN_PASSWORD?.trim() || "955104").trim();
   if (password !== expected) {
     return NextResponse.json({ ok: false, error: "비밀번호가 올바르지 않습니다." }, { status: 401 });
   }
