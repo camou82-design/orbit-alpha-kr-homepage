@@ -8,9 +8,9 @@ export const runtime = "nodejs";
 const COOKIE_NAME = "homepage_admin_auth";
 
 /**
- * Read-only JSON bundle from orbitalpha-futures-paper `data/` on the server.
- * No trading / no Upbit — filesystem read only.
- * Requires same homepage admin session as /admin-login (Blog Automation).
+ * Read-only JSON bundle for /futures-paper.
+ * Uses ORBITALPHA_FUTURES_PAPER_API_URL (Lightsail) or local ORBITALPHA_FUTURES_PAPER_ROOT (dev).
+ * Requires homepage admin session (same cookie as /admin-login).
  */
 export async function GET() {
   const cookieStore = await cookies();

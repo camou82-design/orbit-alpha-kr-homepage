@@ -1,154 +1,90 @@
-import fs from "node:fs/promises";
-import path from "node:path";
+import type { FuturesPaperDataBundle } from "@/lib/futuresPaperBundleCore";
+import { loadFuturesPaperBundleFromDiskRoot } from "@/lib/futuresPaperBundleCore";
 
-export type FuturesPaperSymbolRow = Readonly<{
-  symbol: string;
-  signal?: string;
-  trendOk?: boolean;
-  lastPrice?: number;
-  fundingRate?: number;
-  fetchedAt?: number;
-}>;
+export type {
+  FuturesPaperDataBundle,
+  FuturesPaperHealthHistoryItem,
+  FuturesPaperSymbolRow
+} from "@/lib/futuresPaperBundleCore";
 
-export type FuturesPaperHealthHistoryItem = Readonly<{
-  generatedAt?: number;
-  status?: string;
-  reasons?: string[];
-}>;
+const HEADER_TOKEN = "x-orbitalpha-futures-paper-token";
 
-export type FuturesPaperDataBundle = Readonly<{
-  configured: boolean;
-  configHint: string | null;
-  summary: unknown | null;
-  summaryDaily: unknown | null;
-  summaryWindow: unknown | null;
-  summaryHealth: unknown | null;
-  dashboard: unknown | null;
-  latestSnapshot: unknown | null;
-  latestMeta: unknown | null;
-  symbolRows: FuturesPaperSymbolRow[];
-  healthHistoryRecent: FuturesPaperHealthHistoryItem[];
-}>;
-
-function resolveDataRoot(): { dataDir: string } | null {
-  const raw = process.env.ORBITALPHA_FUTURES_PAPER_ROOT?.trim();
-  if (!raw) return null;
-  const root = path.resolve(raw);
-  return { dataDir: path.join(root, "data") };
-}
-
-async function readJsonFile(filePath: string): Promise<unknown | null> {
-  try {
-    const raw = await fs.readFile(filePath, "utf8");
-    return JSON.parse(raw) as unknown;
-  } catch {
-    return null;
-  }
-}
-
-function pickSymbolRows(latest: unknown): FuturesPaperSymbolRow[] {
-  if (!latest || typeof latest !== "object") return [];
-  const o = latest as Record<string, unknown>;
-  const snaps = o.snapshots;
-  if (!Array.isArray(snaps)) return [];
-  const want = new Set(["BTCUSDT", "ETHUSDT"]);
-  const out: FuturesPaperSymbolRow[] = [];
-  for (const s of snaps) {
-    if (!s || typeof s !== "object") continue;
-    const r = s as Record<string, unknown>;
-    const sym = String(r.symbol ?? "");
-    if (!want.has(sym)) continue;
-    out.push({
-      symbol: sym,
-      signal: typeof r.signal === "string" ? r.signal : undefined,
-      trendOk: typeof r.trendOk === "boolean" ? r.trendOk : undefined,
-      lastPrice: typeof r.lastPrice === "number" ? r.lastPrice : undefined,
-      fundingRate: typeof r.fundingRate === "number" ? r.fundingRate : undefined,
-      fetchedAt: typeof r.fetchedAt === "number" ? r.fetchedAt : undefined
-    });
-  }
-  return out.sort((a, b) => a.symbol.localeCompare(b.symbol));
-}
-
-async function readHealthHistoryTail(dataDir: string, maxLines: number): Promise<FuturesPaperHealthHistoryItem[]> {
-  const p = path.join(dataDir, "reports", "health-history.jsonl");
-  try {
-    const raw = await fs.readFile(p, "utf8");
-    const lines = raw.split("\n").map((l) => l.trim()).filter(Boolean);
-    const tail = lines.slice(-maxLines);
-    const out: FuturesPaperHealthHistoryItem[] = [];
-    for (const line of tail) {
-      try {
-        const j = JSON.parse(line) as Record<string, unknown>;
-        out.push({
-          generatedAt: typeof j.generatedAt === "number" ? j.generatedAt : undefined,
-          status: typeof j.status === "string" ? j.status : undefined,
-          reasons: Array.isArray(j.reasons) ? j.reasons.filter((x): x is string => typeof x === "string") : undefined
-        });
-      } catch {
-        /* skip bad line */
-      }
-    }
-    return out;
-  } catch {
-    return [];
-  }
-}
-
-export async function loadFuturesPaperDataBundle(): Promise<FuturesPaperDataBundle> {
-  const resolved = resolveDataRoot();
-  if (!resolved) {
-    return {
-      configured: false,
-      configHint: "Set ORBITALPHA_FUTURES_PAPER_ROOT to the orbitalpha-futures-paper project root (e.g. /home/admin/orbitalpha-futures-paper).",
-      summary: null,
-      summaryDaily: null,
-      summaryWindow: null,
-      summaryHealth: null,
-      dashboard: null,
-      latestSnapshot: null,
-      latestMeta: null,
-      symbolRows: [],
-      healthHistoryRecent: []
-    };
-  }
-
-  const { dataDir } = resolved;
-  const reports = path.join(dataDir, "reports");
-  const snaps = path.join(dataDir, "snapshots");
-
-  const [
-    summary,
-    summaryDaily,
-    summaryWindow,
-    summaryHealth,
-    dashboard,
-    latestSnapshot,
-    latestMeta
-  ] = await Promise.all([
-    readJsonFile(path.join(reports, "summary.json")),
-    readJsonFile(path.join(reports, "summary-daily.json")),
-    readJsonFile(path.join(reports, "summary-window.json")),
-    readJsonFile(path.join(reports, "summary-health.json")),
-    readJsonFile(path.join(reports, "dashboard.json")),
-    readJsonFile(path.join(snaps, "latest.json")),
-    readJsonFile(path.join(snaps, "latest-meta.json"))
-  ]);
-
-  const symbolRows = pickSymbolRows(latestSnapshot);
-  const healthHistoryRecent = await readHealthHistoryTail(dataDir, 10);
-
+function emptyBundle(configHint: string): FuturesPaperDataBundle {
   return {
-    configured: true,
-    configHint: null,
-    summary,
-    summaryDaily,
-    summaryWindow,
-    summaryHealth,
-    dashboard,
-    latestSnapshot,
-    latestMeta,
-    symbolRows,
-    healthHistoryRecent
+    configured: false,
+    configHint,
+    summary: null,
+    summaryDaily: null,
+    summaryWindow: null,
+    summaryHealth: null,
+    dashboard: null,
+    latestSnapshot: null,
+    latestMeta: null,
+    symbolRows: [],
+    healthHistoryRecent: []
   };
+}
+
+function isBundleShape(v: unknown): v is FuturesPaperDataBundle {
+  if (!v || typeof v !== "object") return false;
+  const o = v as Record<string, unknown>;
+  return typeof o.configured === "boolean" && Array.isArray(o.symbolRows) && Array.isArray(o.healthHistoryRecent);
+}
+
+async function loadFromRemoteApi(baseUrl: string, secret: string): Promise<FuturesPaperDataBundle> {
+  const root = baseUrl.replace(/\/+$/, "");
+  const url = `${root}/api/futures-paper/data`;
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      method: "GET",
+      headers: { [HEADER_TOKEN]: secret },
+      cache: "no-store"
+    });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return emptyBundle(`Lightsail API unreachable: ${msg}`);
+  }
+  if (res.status === 401 || res.status === 403) {
+    return emptyBundle("Lightsail API rejected the token (check ORBITALPHA_FUTURES_PAPER_API_SECRET matches).");
+  }
+  if (!res.ok) {
+    return emptyBundle(`Lightsail API error: HTTP ${res.status}`);
+  }
+  let json: unknown;
+  try {
+    json = await res.json();
+  } catch {
+    return emptyBundle("Lightsail API returned invalid JSON.");
+  }
+  if (!isBundleShape(json)) {
+    return emptyBundle("Lightsail API response did not match the expected bundle shape.");
+  }
+  return json;
+}
+
+/**
+ * Production (Vercel): set ORBITALPHA_FUTURES_PAPER_API_URL + ORBITALPHA_FUTURES_PAPER_API_SECRET.
+ * Local dev: optionally set ORBITALPHA_FUTURES_PAPER_ROOT to read disk (same layout as orbitalpha-futures-paper).
+ */
+export async function loadFuturesPaperDataBundle(): Promise<FuturesPaperDataBundle> {
+  const apiUrl = process.env.ORBITALPHA_FUTURES_PAPER_API_URL?.trim();
+  if (apiUrl) {
+    const secret = process.env.ORBITALPHA_FUTURES_PAPER_API_SECRET?.trim();
+    if (!secret) {
+      return emptyBundle(
+        "Set ORBITALPHA_FUTURES_PAPER_API_SECRET (server-only, same value as on the Lightsail reader API)."
+      );
+    }
+    return loadFromRemoteApi(apiUrl, secret);
+  }
+
+  const root = process.env.ORBITALPHA_FUTURES_PAPER_ROOT?.trim();
+  if (root) {
+    return loadFuturesPaperBundleFromDiskRoot(root);
+  }
+
+  return emptyBundle(
+    "Set ORBITALPHA_FUTURES_PAPER_API_URL (+ ORBITALPHA_FUTURES_PAPER_API_SECRET) for production, or ORBITALPHA_FUTURES_PAPER_ROOT for local disk."
+  );
 }
