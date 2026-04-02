@@ -1,5 +1,7 @@
 # Lightsail: futures-paper read-only API
 
+**End-to-end deploy (DNS → PM2 → Nginx → Certbot → Vercel):** see [DEPLOY.md](./DEPLOY.md).
+
 Serves the same JSON bundle as the homepage `/api/futures-paper/data`, but reads `ORBITALPHA_FUTURES_PAPER_ROOT/data` on **this** machine (e.g. Lightsail where `orbitalpha-futures-paper` lives).
 
 ## Endpoints
