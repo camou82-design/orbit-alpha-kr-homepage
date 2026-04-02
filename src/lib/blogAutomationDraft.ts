@@ -19,4 +19,14 @@ export type BlogDraftBundle = {
   tags: string[];
   threadBodyStyle: string;
   threadTrafficStyle: string;
+  internalLinkKeywords?: string[];
+  internalLinkRecommendations?: Array<{
+    title: string;
+    url: string;
+    publishedAt?: string;
+    category?: string;
+    summary?: string;
+    score?: number;
+  }>;
+  internalLinkBlock?: string;
 };

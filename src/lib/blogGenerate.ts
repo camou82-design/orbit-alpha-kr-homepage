@@ -19,6 +19,19 @@ export type BlogGeneratePayload = {
     body_version: string;
     traffic_version: string;
   };
+  internal_links?: {
+    keywords: string[]; // 5~10
+    recommended: Array<{
+      title: string;
+      url: string;
+      publishedAt?: string;
+      category?: string;
+      summary?: string;
+      score?: number;
+    }>; // usually 3
+    list_text: string;
+    insert_block: string;
+  };
 };
 
 export const BLOG_MODEL_DEFAULT = "gpt-5.4-mini" as const;
@@ -193,7 +206,12 @@ export function payloadToBundle(
 ): BlogDraftBundle {
   const topic = opts.topic?.trim() || "오늘의 경제 이슈";
   const processed = postProcessBlogPayload(p, topic);
-  const body = articleToBlogBody(processed.article);
+  const baseBody = articleToBlogBody(processed.article);
+  const internalBlock =
+    processed.internal_links?.insert_block?.trim()
+      ? processed.internal_links.insert_block.trim()
+      : null;
+  const body = internalBlock ? `${baseBody}\n\n${internalBlock}` : baseBody;
   const infographic =
     opts.infographic && processed.infographic_prompt.trim() ? processed.infographic_prompt : null;
   const tags = normalizeTags(processed.tags);
@@ -208,6 +226,9 @@ export function payloadToBundle(
     tags,
     threadBodyStyle,
     threadTrafficStyle,
+    internalLinkKeywords: processed.internal_links?.keywords,
+    internalLinkRecommendations: processed.internal_links?.recommended,
+    internalLinkBlock: internalBlock ?? undefined,
   };
 }
 

@@ -28,8 +28,8 @@ build_error*
 tsc_errors.txt
 verify_results.txt
 
-# data and output
-data/
+# data and output (repo root only — do not ignore src/**/data API routes)
+/data/
 report.xlsx
 dump.txt
 
@@ -37,6 +37,10 @@ dump.txt
 youtube-making/
 orbit game/
 backups/
+
+# local secrets (never commit)
+.env.local
+.env*.local
 
 # etc
 antigravity-agents/

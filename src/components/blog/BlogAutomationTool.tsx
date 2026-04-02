@@ -304,6 +304,11 @@ function BlogAutomationSectionInner() {
 
   const titlesText = (b: BlogDraftBundle) => titlesPlain(b);
   const tagsText = (b: BlogDraftBundle) => b.tags.join(" ");
+  const internalLinksListText = (b: BlogDraftBundle) => {
+    const rec = b.internalLinkRecommendations ?? [];
+    if (!rec.length) return "";
+    return ["추천 내부링크:", ...rec.map((r) => `${r.title} / ${r.url}`)].join("\n");
+  };
 
   return (
     <>
@@ -357,15 +362,31 @@ function BlogAutomationSectionInner() {
           <span className="step-num">02</span>
           <div className="mb-3">
             <div className="text-[11px] font-black uppercase tracking-[0.22em] text-[#94A3B8]">
-              내부 처리 흐름
+              INTERNAL OPS · PAPER
             </div>
-            <h3 className="mt-2 text-[20px] font-bold font-outfit text-[#00F2FF]">운영 데이터 정리</h3>
+            <h3 className="mt-2 text-[20px] font-bold font-outfit text-[#00F2FF]">선물 모의매매 대시보드</h3>
           </div>
           <p className="text-[#94A3B8] text-[15px] leading-relaxed max-w-[520px]">
-            수집된 데이터를 운영 화면에서 확인할 수 있도록 정리하는 내부 처리 흐름입니다.
+            모의 환경에서 최근 손익·상태·헬스를 한 화면에서 점검합니다. 실거래 운영과는 별도입니다.
           </p>
-          <div className="mt-auto pt-6 border-t border-white/10 text-[11px] font-bold text-[#64748B] tracking-wide">
-            표시용 요약 · 데이터 바인딩 유지
+          <div className="mt-5 space-y-2">
+            <p className="text-[#CBD5E1] text-[14px] leading-relaxed">최근 손익 점검</p>
+            <p className="text-[#CBD5E1] text-[14px] leading-relaxed">상태 및 헬스 확인</p>
+            <p className="text-[#CBD5E1] text-[14px] leading-relaxed">모의매매 전용 대시보드</p>
+          </div>
+          <div className="mt-auto pt-6 flex flex-col gap-3">
+            <Link
+              href="/futures-paper"
+              className="px-5 py-3 rounded-xl btn-gold text-[14px] font-black tracking-wide transition-all text-center"
+            >
+              대시보드 열기
+            </Link>
+            <Link
+              href={`/admin-login?returnTo=${encodeURIComponent("/futures-paper")}`}
+              className="px-5 py-3 rounded-xl border border-[#00F2FF]/35 bg-[#0b1526] text-[#00F2FF] text-[14px] font-black tracking-wide hover:bg-[#12203a] transition-all text-center"
+            >
+              로그인
+            </Link>
           </div>
         </div>
 
@@ -588,6 +609,16 @@ function BlogAutomationSectionInner() {
 
                     {visible.A ? <CopyRow label="A. 제목 3안" text={titlesText(bundle)} /> : null}
                     {visible.B ? <CopyRow label="B. 블로그 본문 초안" text={bundle.body} /> : null}
+                    {visible.B && (bundle.internalLinkRecommendations?.length || bundle.internalLinkBlock) ? (
+                      <>
+                        {bundle.internalLinkRecommendations?.length ? (
+                          <CopyRow label="B+. 추천 내부링크 (3개)" text={internalLinksListText(bundle)} />
+                        ) : null}
+                        {bundle.internalLinkBlock ? (
+                          <CopyRow label="B++. 하단 삽입 문구 블록" text={bundle.internalLinkBlock} />
+                        ) : null}
+                      </>
+                    ) : null}
                     {visible.C && bundle.infographic ? (
                       <CopyRow label="C. 인포그래픽 프롬프트" text={bundle.infographic} />
                     ) : visible.C && !bundle.infographic ? (
