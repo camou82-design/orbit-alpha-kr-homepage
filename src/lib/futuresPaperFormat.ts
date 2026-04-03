@@ -108,8 +108,9 @@ export function mapReasonLabel(key: string): string {
 }
 
 const SIGNAL_LABELS: Record<string, string> = {
-  paper_long_candidate: "롱 진입 후보",
-  none: "중립",
+  paper_long_candidate: "상승 후보 감지",
+  paper_short_candidate: "하락 후보 감지",
+  none: "진입 없음",
   neutral: "중립",
   strong: "강세"
 };
@@ -119,9 +120,38 @@ export function mapSignalLabel(signal: unknown): string {
   return SIGNAL_LABELS[signal] ?? signal;
 }
 
+/**
+ * 스냅샷 한 줄 기준 맥락 문구 (롱·숏·횡보 weak / 추세 strong / 진입 없음).
+ * `trendOk` 단독의 “조건 충족/미충족” 대신 사용.
+ */
+export function describeSnapshotContext(row: Record<string, unknown>): string {
+  const signal = typeof row.signal === "string" ? row.signal : "";
+  const trendOk = row.trendOk === true;
+  const strength =
+    row.candidateStrength === "strong" || row.candidateStrength === "weak" ? row.candidateStrength : null;
+  const sideways = row.sidewaysMode === true;
+
+  if (signal === "paper_long_candidate") {
+    if (sideways && strength === "weak") return "횡보 구간 · 상승 후보(약)";
+    if (strength === "strong") return "추세 맥락 · 상승 후보";
+    return "상승 후보 감지";
+  }
+  if (signal === "paper_short_candidate") {
+    if (sideways && strength === "weak") return "횡보 구간 · 하락 후보(약)";
+    if (strength === "strong") return "추세 맥락 · 하락 후보";
+    return "하락 후보 감지";
+  }
+  if (signal === "none" || signal === "") {
+    if (trendOk === false) return "관망 구간";
+    return "관망(중립)";
+  }
+  return formatEmpty(row.signal);
+}
+
+/** @deprecated Prefer describeSnapshotContext — 롱 전용 레거시 표현 제거 */
 export function formatTrendOk(value: unknown): string {
-  if (value === true) return "조건 충족";
-  if (value === false) return "조건 미충족";
+  if (value === true) return "방향성 확인";
+  if (value === false) return "방향성 약함";
   return formatEmpty(value);
 }
 

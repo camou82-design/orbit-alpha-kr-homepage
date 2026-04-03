@@ -322,11 +322,10 @@ function BlogAutomationSectionInner() {
     <>
       <div className="mt-16 border-t border-white/10 pt-14 lg:pt-16">
         <div className="text-center mb-10 lg:mb-12">
-          <div className="text-[#00F2FF] text-[12px] font-black tracking-[0.28em] uppercase mb-3 font-outfit">
-            Internet Automation
+          <div className="text-[#00F2FF] font-black font-outfit uppercase tracking-[0.2em] sm:tracking-[0.24em] text-[18px] sm:text-[22px] lg:text-[26px] leading-[1.15] mb-4 max-w-[min(100%,42rem)] mx-auto">
+            INTERNET AUTOMATION
           </div>
-          <h2 className="text-[22px] lg:text-[30px] font-black font-outfit text-white tracking-tight">인터넷 자동화 툴</h2>
-          <p className="mt-3 max-w-[720px] mx-auto text-[14px] text-[#94A3B8] leading-relaxed">
+          <p className="mt-0 max-w-[720px] mx-auto text-[14px] text-[#94A3B8] leading-relaxed">
             웹 기반 운영 보조·데이터 확인·자동화 흐름에 연결되는 보조 진입 카드입니다.
           </p>
         </div>
@@ -419,7 +418,7 @@ function BlogAutomationSectionInner() {
 
           <div className="mt-auto pt-6 flex flex-col gap-3">
             <Link
-              href="/kiwoom/paper/"
+              href="https://kiwoom.orbitalpha.kr/paper/"
               className="px-5 py-3 rounded-xl btn-gold text-[14px] font-black tracking-wide transition-all text-center"
             >
               대시보드 열기

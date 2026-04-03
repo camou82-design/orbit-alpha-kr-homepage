@@ -1,10 +1,16 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
+import { buildLedgerPerformanceFromHistory, type FuturesPaperLedgerPerformance } from "@/lib/futuresPaperLedgerStats";
+
 export type FuturesPaperSymbolRow = Readonly<{
   symbol: string;
   signal?: string;
   trendOk?: boolean;
+  /** strong | weak — from snapshot when present */
+  candidateStrength?: string;
+  /** weak sideways path — from snapshot when present */
+  sidewaysMode?: boolean;
   lastPrice?: number;
   fundingRate?: number;
   fetchedAt?: number;
@@ -28,6 +34,11 @@ export type FuturesPaperDataBundle = Readonly<{
   latestMeta: unknown | null;
   symbolRows: FuturesPaperSymbolRow[];
   healthHistoryRecent: FuturesPaperHealthHistoryItem[];
+  /**
+   * Performance (trades / win rate / PnL) recomputed from `data/positions/history.json` at bundle load.
+   * Single source for UI; avoids stale `dashboard.json` / `summary*.json` vs ledger drift.
+   */
+  ledgerPerformance: FuturesPaperLedgerPerformance | null;
 }>;
 
 async function readJsonFile(filePath: string): Promise<unknown | null> {
@@ -51,16 +62,33 @@ function pickSymbolRows(latest: unknown): FuturesPaperSymbolRow[] {
     const r = s as Record<string, unknown>;
     const sym = String(r.symbol ?? "");
     if (!want.has(sym)) continue;
+    const strength =
+      r.candidateStrength === "strong" || r.candidateStrength === "weak"
+        ? r.candidateStrength
+        : undefined;
     out.push({
       symbol: sym,
       signal: typeof r.signal === "string" ? r.signal : undefined,
       trendOk: typeof r.trendOk === "boolean" ? r.trendOk : undefined,
+      candidateStrength: strength,
+      sidewaysMode: typeof r.sidewaysMode === "boolean" ? r.sidewaysMode : undefined,
       lastPrice: typeof r.lastPrice === "number" ? r.lastPrice : undefined,
       fundingRate: typeof r.fundingRate === "number" ? r.fundingRate : undefined,
       fetchedAt: typeof r.fetchedAt === "number" ? r.fetchedAt : undefined
     });
   }
   return out.sort((a, b) => a.symbol.localeCompare(b.symbol));
+}
+
+async function readPositionsHistoryArray(dataDir: string): Promise<unknown[]> {
+  const p = path.join(dataDir, "positions", "history.json");
+  try {
+    const raw = await fs.readFile(p, "utf8");
+    const parsed = JSON.parse(raw) as unknown;
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
 }
 
 async function readHealthHistoryTail(dataDir: string, maxLines: number): Promise<FuturesPaperHealthHistoryItem[]> {
@@ -118,8 +146,14 @@ export async function loadFuturesPaperBundleFromDiskRoot(projectRoot: string): P
     readJsonFile(path.join(snaps, "latest-meta.json"))
   ]);
 
-  const symbolRows = pickSymbolRows(latestSnapshot);
-  const healthHistoryRecent = await readHealthHistoryTail(dataDir, 10);
+  const [symbolRows, healthHistoryRecent, positionsHistory] = await Promise.all([
+    Promise.resolve(pickSymbolRows(latestSnapshot)),
+    readHealthHistoryTail(dataDir, 10),
+    readPositionsHistoryArray(dataDir)
+  ]);
+
+  const generatedAt = Date.now();
+  const ledgerPerformance = buildLedgerPerformanceFromHistory(positionsHistory, generatedAt);
 
   return {
     configured: true,
@@ -132,6 +166,7 @@ export async function loadFuturesPaperBundleFromDiskRoot(projectRoot: string): P
     latestSnapshot,
     latestMeta,
     symbolRows,
-    healthHistoryRecent
+    healthHistoryRecent,
+    ledgerPerformance
   };
 }

@@ -11,11 +11,29 @@ import {
   formatPercent,
   formatPrice,
   formatRateRaw,
-  formatTrendOk,
+  describeSnapshotContext,
   mapReasonLabel,
   mapSignalLabel,
   mapStatusLabel
 } from "@/lib/futuresPaperFormat";
+
+type LedgerWindow = {
+  totalTrades: number;
+  winRate: number;
+  totalPnlUsdNet: number;
+  totalPnlUsdGross: number;
+  totalFeeUsd: number;
+  totalFundingUsd: number;
+};
+
+type LedgerPerformance = {
+  generatedAt: number;
+  parsedTradeCount: number;
+  all: LedgerWindow;
+  last7d: LedgerWindow;
+  last30d: LedgerWindow;
+  monthToDate: LedgerWindow;
+};
 
 type Bundle = {
   configured: boolean;
@@ -26,6 +44,7 @@ type Bundle = {
   dashboard: Record<string, unknown> | null;
   symbolRows: Array<Record<string, unknown>>;
   healthHistoryRecent: Array<Record<string, unknown>>;
+  ledgerPerformance: LedgerPerformance | null;
 };
 
 function ReasonBadges({ reasons }: { reasons: string[] }) {
@@ -102,11 +121,14 @@ export default function FuturesPaperPage() {
 
   const dash = bundle?.dashboard ?? null;
   const snap = (dash?.snapshot as Record<string, unknown> | undefined) ?? null;
-  const all = (snap?.all as Record<string, unknown> | undefined) ?? null;
-  const w7 = (snap?.last7d as Record<string, unknown> | undefined) ?? null;
-  const w30 = (snap?.last30d as Record<string, unknown> | undefined) ?? null;
-  const mtd = (snap?.monthToDate as Record<string, unknown> | undefined) ?? null;
+  const perf = bundle?.ledgerPerformance ?? null;
+  /** 성과 숫자: 원장 재집계 우선, 구 API는 dashboard.snapshot 폴백 */
+  const all = perf?.all ?? (snap?.all as Record<string, unknown> | undefined) ?? null;
+  const w7 = perf?.last7d ?? (snap?.last7d as Record<string, unknown> | undefined) ?? null;
+  const w30 = perf?.last30d ?? (snap?.last30d as Record<string, unknown> | undefined) ?? null;
+  const mtd = perf?.monthToDate ?? (snap?.monthToDate as Record<string, unknown> | undefined) ?? null;
   const trend = (dash?.recentTrend as Record<string, unknown> | undefined) ?? null;
+  const perfBaselineMs = perf?.generatedAt ?? null;
 
   const statusRaw = dash?.status ?? bundle?.summaryHealth?.status;
   const reasonsArr = Array.isArray(dash?.reasons) ? (dash.reasons as string[]) : [];
@@ -159,7 +181,12 @@ export default function FuturesPaperPage() {
                 <ReasonBadges reasons={reasonsArr} />
               </div>
             </div>
-            <Stat label="데이터 기준 시각 (KST)" value={formatDateTimeKst(generatedMs)} />
+            <Stat label="헬스 리포트 시각 (KST)" value={formatDateTimeKst(generatedMs)} />
+            <Stat
+              label="성과 원장 집계 시각 (KST)"
+              value={formatDateTimeKst(perfBaselineMs)}
+              valueClass="text-xs text-zinc-400"
+            />
             <Stat label="최근 7일 손익 (USD)" value={formatCurrencyUsd(w7?.totalPnlUsdNet)} valueClass="tabular-nums text-amber-100" />
             <Stat label="최근 30일 승률" value={formatPercent(w30?.winRate)} valueClass="tabular-nums" />
             <Stat label="전체 누적 손익 (USD)" value={formatCurrencyUsd(all?.totalPnlUsdNet)} valueClass="tabular-nums text-amber-100" />
@@ -181,8 +208,8 @@ export default function FuturesPaperPage() {
                   <dl className="mt-3 grid grid-cols-[auto_1fr] gap-x-3 gap-y-2 text-sm">
                     <dt className="text-zinc-500">시그널</dt>
                     <dd className="text-zinc-100">{mapSignalLabel(row.signal)}</dd>
-                    <dt className="text-zinc-500">추세 필터</dt>
-                    <dd className="text-zinc-100">{formatTrendOk(row.trendOk)}</dd>
+                    <dt className="text-zinc-500">맥락</dt>
+                    <dd className="text-zinc-100">{describeSnapshotContext(row)}</dd>
                     <dt className="text-zinc-500">최근 가격</dt>
                     <dd className="tabular-nums text-zinc-100">{formatPrice(row.lastPrice)}</dd>
                     <dt className="text-zinc-500">펀딩 비율</dt>
@@ -199,11 +226,16 @@ export default function FuturesPaperPage() {
         {/* 성과 요약 */}
         <section className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-5">
           <h2 className="mb-4 text-xs font-semibold uppercase tracking-wider text-zinc-500">성과 요약</h2>
+          <p className="mb-4 text-xs text-zinc-500">
+            {perf
+              ? `종료 거래 원장(data/positions/history.json)에서 파싱 ${formatCount(perf.parsedTradeCount)}건 · 창 경계는 집계 시각(UTC) 기준`
+              : "구번들: dashboard.snapshot 기준(원장과 어긋날 수 있음). Lightsail reader API를 최신화하면 원장 집계로 통일됩니다."}
+          </p>
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-            <MiniBlock title="전체 누적" trades={all?.totalTrades} wr={all?.winRate} pnl={all?.totalPnlUsdNet} />
-            <MiniBlock title="최근 7일" trades={w7?.totalTrades} wr={w7?.winRate} pnl={w7?.totalPnlUsdNet} />
-            <MiniBlock title="최근 30일" trades={w30?.totalTrades} wr={w30?.winRate} pnl={w30?.totalPnlUsdNet} />
-            <MiniBlock title="이번 달" trades={mtd?.totalTrades} wr={mtd?.winRate} pnl={mtd?.totalPnlUsdNet} />
+            <MiniBlock title="전체 누적" slice={all} />
+            <MiniBlock title="최근 7일" slice={w7} />
+            <MiniBlock title="최근 30일" slice={w30} />
+            <MiniBlock title="이번 달" slice={mtd} />
           </div>
         </section>
 
@@ -294,17 +326,24 @@ function Stat({
   );
 }
 
-function MiniBlock({
-  title,
-  trades,
-  wr,
-  pnl
-}: {
-  title: string;
-  trades: unknown;
-  wr: unknown;
-  pnl: unknown;
-}) {
+function isLedgerSlice(v: unknown): v is LedgerWindow {
+  if (!v || typeof v !== "object") return false;
+  const o = v as Record<string, unknown>;
+  return (
+    typeof o.totalTrades === "number" &&
+    typeof o.winRate === "number" &&
+    typeof o.totalPnlUsdNet === "number" &&
+    typeof o.totalPnlUsdGross === "number" &&
+    typeof o.totalFeeUsd === "number" &&
+    typeof o.totalFundingUsd === "number"
+  );
+}
+
+function MiniBlock({ title, slice }: { title: string; slice: unknown }) {
+  const ledger = isLedgerSlice(slice) ? slice : null;
+  const trades = ledger?.totalTrades ?? (slice as Record<string, unknown> | null)?.totalTrades;
+  const wr = ledger?.winRate ?? (slice as Record<string, unknown> | null)?.winRate;
+  const pnl = ledger?.totalPnlUsdNet ?? (slice as Record<string, unknown> | null)?.totalPnlUsdNet;
   return (
     <div className="rounded-lg border border-zinc-800 bg-zinc-950/50 p-4">
       <p className="text-xs font-medium text-zinc-500">{title}</p>
@@ -315,9 +354,25 @@ function MiniBlock({
         승률 <span className="ml-1 tabular-nums text-zinc-100">{formatPercent(wr)}</span>
       </p>
       <p className="mt-1 text-sm text-zinc-300">
-        손익 (USD){" "}
+        순손익 (net){" "}
         <span className="ml-1 tabular-nums font-medium text-amber-100/95">{formatCurrencyUsd(pnl)}</span>
       </p>
+      {ledger ? (
+        <dl className="mt-3 space-y-1 border-t border-zinc-800/80 pt-2 text-xs text-zinc-500">
+          <div className="flex justify-between gap-2">
+            <dt>gross</dt>
+            <dd className="font-mono tabular-nums text-zinc-400">{formatCurrencyUsd(ledger.totalPnlUsdGross)}</dd>
+          </div>
+          <div className="flex justify-between gap-2">
+            <dt>fee</dt>
+            <dd className="font-mono tabular-nums text-zinc-400">{formatCurrencyUsd(ledger.totalFeeUsd)}</dd>
+          </div>
+          <div className="flex justify-between gap-2">
+            <dt>funding</dt>
+            <dd className="font-mono tabular-nums text-zinc-400">{formatCurrencyUsd(ledger.totalFundingUsd)}</dd>
+          </div>
+        </dl>
+      ) : null}
     </div>
   );
 }
