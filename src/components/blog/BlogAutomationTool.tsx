@@ -310,53 +310,123 @@ function BlogAutomationSectionInner() {
     return ["추천 내부링크:", ...rec.map((r) => `${r.title} / ${r.url}`)].join("\n");
   };
 
+  const openBlogTool = () => {
+    if (adminAuthed !== true) {
+      router.replace(`/admin-login?returnTo=${encodeURIComponent("/?blogOpen=1")}`);
+      return;
+    }
+    setOpen((o) => !o);
+  };
+
   return (
     <>
+      <div className="mt-16 border-t border-white/10 pt-14 lg:pt-16">
+        <div className="text-center mb-10 lg:mb-12">
+          <div className="text-[#00F2FF] text-[12px] font-black tracking-[0.28em] uppercase mb-3 font-outfit">
+            Internet Automation
+          </div>
+          <h2 className="text-[22px] lg:text-[30px] font-black font-outfit text-white tracking-tight">인터넷 자동화 툴</h2>
+          <p className="mt-3 max-w-[720px] mx-auto text-[14px] text-[#94A3B8] leading-relaxed">
+            웹 기반 운영 보조·데이터 확인·자동화 흐름에 연결되는 보조 진입 카드입니다.
+          </p>
+        </div>
+
+        <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-6 lg:gap-8">
+          <button
+            type="button"
+            className="step-box text-left w-full cursor-pointer transition hover:border-[#00F2FF]/35 flex flex-col min-h-[240px]"
+            onClick={openBlogTool}
+          >
+            <div className="text-[11px] font-black uppercase tracking-[0.22em] text-[#94A3B8]">INTERNET TOOL</div>
+            <h3 className="mt-2 text-[18px] font-bold font-outfit leading-snug">콘텐츠 운영 지원 도구</h3>
+            <p className="mt-3 text-[#94A3B8] text-[14px] leading-relaxed">
+              블로그 발행 흐름, 초안 정리, 운영 보조 작업을 지원하는 웹 기반 도구입니다.
+            </p>
+            <div className="mt-4 space-y-1.5">
+              <p className="text-[#CBD5E1] text-[13px] leading-relaxed">발행 흐름 관리</p>
+              <p className="text-[#CBD5E1] text-[13px] leading-relaxed">초안 정리 및 검토</p>
+              <p className="text-[#CBD5E1] text-[13px] leading-relaxed">운영 보조 기능</p>
+            </div>
+            <div className="mt-auto pt-5 flex items-center justify-between border-t border-white/10">
+              <span className="text-[10px] font-bold text-[#64748B] tracking-wide">보조 진입</span>
+              <span className="px-3 py-1.5 rounded-lg border border-[#00F2FF]/35 bg-[#0b1526] text-[#00F2FF] text-[11px] font-black tracking-wide">
+                {adminAuthed === true ? "도구 열기" : "로그인"}
+              </span>
+            </div>
+          </button>
+
+          <div className="step-box border-white/10 flex flex-col min-h-[240px] opacity-95">
+            <div className="text-[11px] font-black uppercase tracking-[0.22em] text-[#94A3B8]">WEB OPS</div>
+            <h3 className="mt-2 text-[18px] font-bold font-outfit text-[#CBD5E1]">웹 운영 보조</h3>
+            <p className="mt-3 text-[#94A3B8] text-[14px] leading-relaxed">
+              공개 페이지·콘텐츠 흐름을 가볍게 점검하고 정리할 때 쓰는 보조 카드입니다.
+            </p>
+            <div className="mt-4 space-y-1.5">
+              <p className="text-[#64748B] text-[13px]">· 배포·접속 상태 확인</p>
+              <p className="text-[#64748B] text-[13px]">· 운영 메모·체크</p>
+            </div>
+            <p className="mt-auto pt-5 text-[11px] text-[#52525b] border-t border-white/5">자리 표시 · 세부 연결은 추후 정리</p>
+          </div>
+
+          <div className="step-box border-white/10 flex flex-col min-h-[240px] opacity-95">
+            <div className="text-[11px] font-black uppercase tracking-[0.22em] text-[#94A3B8]">DATA</div>
+            <h3 className="mt-2 text-[18px] font-bold font-outfit text-[#CBD5E1]">데이터 확인</h3>
+            <p className="mt-3 text-[#94A3B8] text-[14px] leading-relaxed">
+              수치·요약·스냅샷을 빠르게 훑어보는 용도의 보조 영역입니다.
+            </p>
+            <div className="mt-4 space-y-1.5">
+              <p className="text-[#64748B] text-[13px]">· 요약 지표 열람</p>
+              <p className="text-[#64748B] text-[13px]">· 이력·로그 스캔</p>
+            </div>
+            <p className="mt-auto pt-5 text-[11px] text-[#52525b] border-t border-white/5">자리 표시 · 세부 연결은 추후 정리</p>
+          </div>
+
+          <div className="step-box border-white/10 flex flex-col min-h-[240px] opacity-95">
+            <div className="text-[11px] font-black uppercase tracking-[0.22em] text-[#94A3B8]">FLOW</div>
+            <h3 className="mt-2 text-[18px] font-bold font-outfit text-[#CBD5E1]">자동화 흐름</h3>
+            <p className="mt-3 text-[#94A3B8] text-[14px] leading-relaxed">
+              반복 작업·알림·승인 단계를 한 줄로 묶어 보는 관점의 보조 카드입니다.
+            </p>
+            <div className="mt-4 space-y-1.5">
+              <p className="text-[#64748B] text-[13px]">· 단계별 상태</p>
+              <p className="text-[#64748B] text-[13px]">· 운영 메모</p>
+            </div>
+            <p className="mt-auto pt-5 text-[11px] text-[#52525b] border-t border-white/5">자리 표시 · 세부 연결은 추후 정리</p>
+          </div>
+        </div>
+      </div>
+
       <div className="grid md:grid-cols-3 gap-8 mt-16">
-        <button
-          type="button"
-          className="step-box text-left w-full cursor-pointer transition hover:border-[#00F2FF]/35 flex flex-col min-h-[260px]"
-          onClick={() => {
-            if (adminAuthed !== true) {
-              router.replace(`/admin-login?returnTo=${encodeURIComponent("/?blogOpen=1")}`);
-              return;
-            }
-            setOpen((o) => !o);
-          }}
-        >
+        <div className="step-box border-[#00F2FF]/30 flex flex-col min-h-[260px]">
           <span className="step-num">01</span>
           <div className="mb-3">
             <div className="text-[11px] font-black uppercase tracking-[0.22em] text-[#94A3B8]">
-              Internal Tool
+              INTERNAL TOOL
             </div>
-            <h3 className="mt-2 text-[20px] font-bold font-outfit">콘텐츠 운영 지원 도구</h3>
+            <h3 className="mt-2 text-[20px] font-bold font-outfit">주식매매 자동화 툴</h3>
           </div>
 
           <p className="text-[#94A3B8] text-[15px] leading-relaxed max-w-[520px]">
-            {adminAuthed === true ? (
-              <>블로그 발행 흐름과 초안 정리를 지원하는 내부 운영 도구입니다.</>
-            ) : adminAuthed === null ? (
-              <>권한을 확인하는 중입니다…</>
-            ) : (
-              <>블로그 발행 흐름과 초안 정리를 지원하는 내부 운영 도구입니다.</>
-            )}
+            실시간 흐름을 점검하고 테스트 주문 환경을 확인하는 운영형 대시보드입니다. 실계좌 운영과는 분리된
+            paper 전용 화면으로 연결됩니다.
           </p>
 
           <div className="mt-5 space-y-2">
-            <p className="text-[#CBD5E1] text-[14px] leading-relaxed">발행 흐름 정리</p>
-            <p className="text-[#CBD5E1] text-[14px] leading-relaxed">초안 검토 및 관리</p>
-            <p className="text-[#CBD5E1] text-[14px] leading-relaxed">내부 운영용 로그인 환경</p>
+            <p className="text-[#CBD5E1] text-[14px] leading-relaxed">실시간 흐름 점검</p>
+            <p className="text-[#CBD5E1] text-[14px] leading-relaxed">테스트 주문 환경 확인</p>
+            <p className="text-[#CBD5E1] text-[14px] leading-relaxed">운영 로그 기반 상태 확인</p>
           </div>
 
-          <div className="mt-auto pt-6 flex items-center justify-between border-t border-white/10">
-            <div className="text-[11px] font-bold text-[#64748B] tracking-wide">
-              내부 운영 전용
-            </div>
-            <div className="px-4 py-2 rounded-xl border border-[#00F2FF]/35 bg-[#0b1526] text-[#00F2FF] text-[12px] font-black tracking-wide hover:bg-[#12203a] transition-all">
-              {adminAuthed === true ? "자세히 보기" : "관리도구 로그인"}
-            </div>
+          <div className="mt-auto pt-6 flex flex-col gap-3">
+            <Link
+              href="/kiwoom/paper/"
+              className="px-5 py-3 rounded-xl btn-gold text-[14px] font-black tracking-wide transition-all text-center"
+            >
+              대시보드 열기
+            </Link>
+            <p className="text-[11px] text-[#52525b] text-center tracking-wide">paper dashboard entry</p>
           </div>
-        </button>
+        </div>
 
         <div className="step-box border-[#00F2FF]/30 flex flex-col min-h-[260px]">
           <span className="step-num">02</span>

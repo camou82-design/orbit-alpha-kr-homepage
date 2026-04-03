@@ -1,0 +1,10 @@
+node_modules/
+dist/
+.env
+*.log
+data/monitor-status.json
+data/paper-dashboard.json
+data/signals/*.jsonl
+data/trades/*.jsonl
+data/reports/*.json
+tsconfig.tsbuildinfo

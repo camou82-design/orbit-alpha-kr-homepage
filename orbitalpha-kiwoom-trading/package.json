@@ -1,0 +1,43 @@
+{
+  "name": "orbitalpha-kiwoom-trading",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Kiwoom domestic stock auto-trading engine (independent project)",
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "start": "tsx src/app/main.ts",
+    "dev": "tsx src/app/main.ts",
+    "live:test": "cross-env AUTH_ENABLED=false AUTH_BYPASS_ROLE=trader APP_ENTRY_MODE=live LIVE_CONFIRMATION_REQUIRED=false tsx src/app/main.ts",
+    "live:local": "npm run live:test",
+    "live:all": "concurrently -k -n engine,monitor -c cyan,magenta \"npm run live:test\" \"npm run monitor\"",
+    "monitor": "tsx src/app/monitor-server.ts",
+    "paper:ui": "tsx src/app/paper-dashboard-server.ts",
+    "paper:engine": "cross-env APP_ENTRY_MODE=paper AUTH_ENABLED=false tsx src/app/main.ts",
+    "paper:all": "concurrently -k -n paper,ui -c green,blue \"cross-env APP_ENTRY_MODE=paper npm start\" \"npm run paper:ui\"",
+    "pm2:start": "pm2 start ecosystem.config.cjs",
+    "pm2:stop": "pm2 delete orbitalpha-kiwoom-live-engine orbitalpha-kiwoom-live-monitor orbitalpha-kiwoom-paper-engine orbitalpha-kiwoom-paper-dashboard",
+    "pm2:reload": "pm2 reload ecosystem.config.cjs",
+    "summarize-signals": "tsx src/app/summarize-signals.ts",
+    "summarize-trades": "tsx src/app/summarize-trades.ts",
+    "summarize-signals:regular:test": "tsx src/app/summarize-signals.ts --save --tag=regular-test",
+    "summarize-signals:regular:strict": "tsx src/app/summarize-signals.ts --save --tag=regular-strict",
+    "summarize-signals:regular:loose": "tsx src/app/summarize-signals.ts --save --tag=regular-loose",
+    "run:regular:test": "cross-env FORCE_SESSION_PHASE=REGULAR PAPER_LOOP_MAX_TICKS=30 SIGNAL_CANDIDATE_MIN_SCORE=38 UNIVERSE_MIN_TURNOVER_KRW=500000000 EXPERIMENT_TAG=regular-test npm start",
+    "run:regular:strict": "cross-env FORCE_SESSION_PHASE=REGULAR PAPER_LOOP_MAX_TICKS=30 SIGNAL_CANDIDATE_MIN_SCORE=45 UNIVERSE_MIN_TURNOVER_KRW=2000000000 EXPERIMENT_TAG=regular-strict npm start",
+    "run:regular:loose": "cross-env FORCE_SESSION_PHASE=REGULAR PAPER_LOOP_MAX_TICKS=30 SIGNAL_CANDIDATE_MIN_SCORE=32 UNIVERSE_MIN_TURNOVER_KRW=200000000 EXPERIMENT_TAG=regular-loose npm start"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "concurrently": "^9.1.2",
+    "cross-env": "^7.0.3",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.7"
+  }
+}
