@@ -1,5 +1,5 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, isAbsolute, join } from "node:path";
 import type { PaperPosition } from "../core/types.js";
 import type {
   PumpEntryExclusion,
@@ -192,8 +192,15 @@ export function buildPaperDashboardSnapshot(params: {
 }
 
 function defaultPath(): string {
-  const raw = process.env.PAPER_DASHBOARD_FILE?.trim();
-  if (raw && raw.length > 0) return join(process.cwd(), raw);
+  const fileOverride = process.env.PAPER_DASHBOARD_FILE?.trim();
+  if (fileOverride && fileOverride.length > 0) {
+    return isAbsolute(fileOverride) ? fileOverride : join(process.cwd(), fileOverride);
+  }
+  const projectRoot = process.env.KIWOOM_PROJECT_ROOT?.trim();
+  if (projectRoot && projectRoot.length > 0) {
+    const root = isAbsolute(projectRoot) ? projectRoot : join(process.cwd(), projectRoot);
+    return join(root, "data", "paper-dashboard.json");
+  }
   return join(process.cwd(), "data", "paper-dashboard.json");
 }
 

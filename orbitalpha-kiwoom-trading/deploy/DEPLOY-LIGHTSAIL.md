@@ -19,6 +19,7 @@ npm run build
 - `PAPER_DASHBOARD_HOST=127.0.0.1`
 - `MONITOR_PORT=3001`
 - `PAPER_DASHBOARD_PORT=3002`
+- **스냅샷 경로 고정(권장):** 엔진과 `npm run monitor`의 `process.cwd()`가 다르면 구버전 JSON을 읽을 수 있음. 예: `MONITOR_STATUS_FILE=/home/admin/.../orbitalpha-kiwoom-trading/data/monitor-status.json` (절대 경로) 또는 `KIWOOM_PROJECT_ROOT`를 동일 값으로 설정.
 - 기존 `KIWOOM_*`·`LIVE_*`·`PAPER_*` 등은 운영값 유지 (가드 완화 금지)
 
 ## 3. PM2

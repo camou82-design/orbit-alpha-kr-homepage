@@ -534,6 +534,6 @@ server.listen(PORT, HOST, () => {
     `[monitor] read-only local monitor at http://${HOST}:${PORT} (status file: ${getMonitorStatusPathForServer()})`
   );
   console.log(
-    "[monitor] 엔진과 다른 cwd이면 다른 data/monitor-status.json을 읽습니다. 엔진과 동일 디렉터리에서 npm run monitor 하세요."
+    "[monitor] 엔진과 다른 cwd이면 스냅샷이 어긋날 수 있습니다. MONITOR_STATUS_FILE(절대 경로) 또는 KIWOOM_PROJECT_ROOT로 경로를 고정하세요."
   );
 });

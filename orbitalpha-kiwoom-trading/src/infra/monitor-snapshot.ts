@@ -1,5 +1,5 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, isAbsolute, join } from "node:path";
 
 /** Account strip totals — real HTS feed can replace stub zeros later. */
 export interface MonitorAccountSummary {
@@ -81,9 +81,22 @@ export interface LocalMonitorSnapshot {
   lastLiveTestOrderResult?: Record<string, unknown>;
 }
 
+/**
+ * 엔진·`npm run monitor`가 **동일 파일**을 쓰려면 cwd가 같거나 아래 env로 경로를 고정하세요.
+ * - `MONITOR_STATUS_FILE`이 절대 경로면 그대로 사용 (PM2/쉘 cwd 불일치 시 권장).
+ * - 상대 경로면 `process.cwd()`에 붙임 (기존 동작).
+ * - 미설정 시 `KIWOOM_PROJECT_ROOT/data/monitor-status.json` (루트는 절대 또는 cwd 기준 상대).
+ */
 function defaultPath(): string {
-  const raw = process.env.MONITOR_STATUS_FILE?.trim();
-  if (raw && raw.length > 0) return join(process.cwd(), raw);
+  const fileOverride = process.env.MONITOR_STATUS_FILE?.trim();
+  if (fileOverride && fileOverride.length > 0) {
+    return isAbsolute(fileOverride) ? fileOverride : join(process.cwd(), fileOverride);
+  }
+  const projectRoot = process.env.KIWOOM_PROJECT_ROOT?.trim();
+  if (projectRoot && projectRoot.length > 0) {
+    const root = isAbsolute(projectRoot) ? projectRoot : join(process.cwd(), projectRoot);
+    return join(root, "data", "monitor-status.json");
+  }
   return join(process.cwd(), "data", "monitor-status.json");
 }
 
