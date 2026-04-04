@@ -1,8 +1,8 @@
+import "dotenv/config";
 /**
  * Local read-only monitor: serves JSON + HTML from monitor-status file only.
  * No trading, no broker, no control plane — browse-only on 127.0.0.1.
  */
-import "dotenv/config";
 import { readFileSync, existsSync } from "node:fs";
 import { createServer } from "node:http";
 import type {

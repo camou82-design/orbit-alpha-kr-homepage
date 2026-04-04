@@ -1,3 +1,4 @@
+import "dotenv/config";
 import { createBypassSession, type UserSession } from "../auth/session.js";
 import { loadConfig } from "../infra/config.js";
 import {

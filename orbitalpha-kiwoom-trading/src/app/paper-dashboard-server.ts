@@ -1,8 +1,8 @@
+import "dotenv/config";
 /**
  * Paper-only dashboard: reads data/paper-dashboard.json written by the paper loop.
  * No broker, no live Kiwoom, no orders — browse-only on 127.0.0.1.
  */
-import "dotenv/config";
 import { readFileSync, existsSync } from "node:fs";
 import { createServer } from "node:http";
 import type {
