@@ -23,7 +23,7 @@ npm run build
 권장:
 
 - `NODE_ENV=production`
-- `KIWOOM_PUBLIC_BASE_PATH=/kiwoom` (Nginx 하위 경로와 상호 링크)
+- `KIWOOM_LIVE_PUBLIC_MOUNT=/live`, `KIWOOM_PAPER_PUBLIC_MOUNT=/paper` (Nginx 공개 경로와 동일; 인증·상호 링크)
 - `MONITOR_HOST=127.0.0.1`, `PAPER_DASHBOARD_HOST=127.0.0.1`, `MONITOR_PORT=3001`, `PAPER_DASHBOARD_PORT=3002`
 - 기존 `LIVE_*`·`PAPER_*` 등 운영값 유지 (가드 완화 금지)
 

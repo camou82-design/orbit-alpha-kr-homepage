@@ -81,7 +81,7 @@ sudo env PATH=$PATH pm2 startup systemd -u $USER --hp $HOME
 
 설정 템플릿: `deploy/nginx-kiwoom.example.conf` — `X-Forwarded-*` / `Host` 포함. WebSocket 미사용 시 일반 `proxy_pass` 만으로 충분합니다.
 
-**상호 이동 링크 (monitor ↔ paper 대시보드):** Nginx가 `X-Forwarded-Host` / `X-Forwarded-Proto`를 넘기면 HTML의 버튼은 `/kiwoom/live/`, `/kiwoom/paper/` 경로로 생성됩니다. 로컬에서 `127.0.0.1:3001`·`:3002`로 직접 붙을 때는 각 포트 URL을 사용합니다. 경로를 고정하려면 `.env`에 `KIWOOM_PUBLIC_BASE_PATH=/kiwoom` 을 설정하세요 (`src/infra/cross-nav-links.ts`).
+**상호 이동 링크 (monitor ↔ paper 대시보드):** `.env`에 `KIWOOM_LIVE_PUBLIC_MOUNT=/live`, `KIWOOM_PAPER_PUBLIC_MOUNT=/paper` 를 Nginx 공개 경로와 맞추면 링크·로그인 리다이렉트가 `/live/`, `/paper/` 기준으로 고정됩니다. 절대 URL이 필요하면 `KIWOOM_LIVE_URL` / `KIWOOM_PAPER_URL` 을 씁니다. 마운트가 비어 있고 프록시 헤더만 있으면 기본 `/live/`, `/paper/` 를 씁니다. 로컬 직접 포트 접속은 `127.0.0.1:3001`·`:3002` URL (`src/infra/cross-nav-links.ts`, `dashboard-http-auth.ts`).
 
 ### 최소 보안 (권장)
 
@@ -91,7 +91,7 @@ sudo env PATH=$PATH pm2 startup systemd -u $USER --hp $HOME
 
 ### 운영 시 남는 리스크 (요약)
 
-1. **프록시 헤더 누락** 시 링크가 포트 URL로 생성될 수 있음 → `KIWOOM_PUBLIC_BASE_PATH` 로 명시하거나 Nginx에서 `X-Forwarded-*` 전달 확인.
+1. **프록시 헤더 누락** 시 링크가 포트 URL로 생성될 수 있음 → `KIWOOM_LIVE_PUBLIC_MOUNT` / `KIWOOM_PAPER_PUBLIC_MOUNT` 로 명시하거나 Nginx에서 `X-Forwarded-*` 전달 확인.
 2. **디스크·권한**: `data/`·`logs/` 쓰기 권한, 디스크 부족 시 스냅샷 실패.
 3. **PM2·Nginx 장애**: 한쪽만 재시작되면 포트 불일치; 배포 후 `pm2 status`·`curl -I` 로 확인.
 

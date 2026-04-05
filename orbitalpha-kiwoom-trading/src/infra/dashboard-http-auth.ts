@@ -8,7 +8,8 @@ const TOKEN_PREFIX = "v1";
 const MAX_AGE_SEC = 12 * 3600;
 const MIN_SECRET_LEN = 16;
 
-function normalizePublicBase(raw: string | undefined): string {
+/** 공개 URL 마운트 (선행 /, 후행 슬래시 없음). 예: `/live`, `/paper` */
+function normalizeMount(raw: string | undefined): string {
   if (!raw) return "";
   let p = raw.trim();
   if (p === "") return "";
@@ -17,20 +18,16 @@ function normalizePublicBase(raw: string | undefined): string {
 }
 
 /**
- * 브라우저 URL 기준 대시보드 앱 접두사 (선행 /, 후행 슬래시 없음).
- * `KIWOOM_PUBLIC_BASE_PATH=/kiwoom` → `/kiwoom/live` — reverse proxy 하위 경로와 일치해야 함.
- * 미설정(로컬 포트 직접 접속) → "" (`/auth/login` 등은 호스트 루트 기준).
+ * LIVE 대시보드 브라우저 경로 접두사.
+ * `KIWOOM_LIVE_PUBLIC_MOUNT=/live` → 로그인 `/live/auth/login`, 복귀 `/live/`.
+ * 미설정 시 "" (로컬 포트 직접 접속: `/auth/login` 등 앱 루트 기준).
  */
 export function dashboardPublicMountLive(): string {
-  const base = normalizePublicBase(process.env.KIWOOM_PUBLIC_BASE_PATH);
-  if (base) return `${base}/live`;
-  return "";
+  return normalizeMount(process.env.KIWOOM_LIVE_PUBLIC_MOUNT);
 }
 
 export function dashboardPublicMountPaper(): string {
-  const base = normalizePublicBase(process.env.KIWOOM_PUBLIC_BASE_PATH);
-  if (base) return `${base}/paper`;
-  return "";
+  return normalizeMount(process.env.KIWOOM_PAPER_PUBLIC_MOUNT);
 }
 
 /**
