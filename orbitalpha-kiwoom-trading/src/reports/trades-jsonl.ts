@@ -5,16 +5,39 @@ import { dirname, join } from "node:path";
  * One closed paper trade line. Older JSONL may omit cost fields; parsers should default.
  */
 export interface TradeRecord {
+  /** ISO timestamp - when first identified as candidate */
+  candidate_at: string;
+  /** ISO timestamp - when actual fill occurred */
+  entered_at: string;
+  /** ISO timestamp - when position closed */
+  exited_at: string;
+  /** Legacy fields (mapping to entered_at/exited_at) for compatibility */
   openedAt: string;
   closedAt: string;
+
   symbol: string;
   entryPrice: number;
   exitPrice: number;
   quantity?: number;
+
+  /** Categorized reason code (e.g. breakout_confirmed) */
+  entry_reason_code: string;
+  /** Categorized reason code (e.g. stop_loss) */
+  exit_reason_code: string;
   /** Final net return on entry notional, % (fees/tax when recorded). */
   pnlPct: number;
   /** Same as finalNetPnlKrw (legacy alias). */
   pnlKrw: number;
+
+  /** Maximum Favorable Excursion (%) */
+  mfe_pct: number;
+  /** Maximum Favorable Excursion (KRW) */
+  mfe_krw: number;
+  /** Maximum Adverse Excursion (%) */
+  mae_pct: number;
+  /** Maximum Adverse Excursion (KRW) */
+  mae_krw: number;
+
   grossPnlKrw?: number;
   feeBuyKrw?: number;
   feeSellKrw?: number;

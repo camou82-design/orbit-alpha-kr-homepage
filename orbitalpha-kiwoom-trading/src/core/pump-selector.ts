@@ -18,6 +18,8 @@ export interface PumpSignalRow {
   score: number;
   reason: string;
   turnover: number;
+  /** ISO timestamp */
+  candidate_at: string;
 }
 
 export interface PumpSelectParams {
@@ -56,6 +58,8 @@ export interface PumpEntryPick {
   symbol: string;
   score: number;
   reason: string;
+  /** ISO timestamp - when first identified as candidate */
+  candidate_at: string;
 }
 
 export type PumpExclusionReason =
@@ -71,6 +75,8 @@ export type PumpExclusionReason =
 export interface PumpEntryExclusion {
   symbol: string;
   reason: PumpExclusionReason;
+  score?: number;
+  turnover?: number;
   headroomPct: number | null;
   upperLimitPrice: number | null;
   changeFromPrevClosePct: number | null;
@@ -105,6 +111,8 @@ function buildExclusion(
   extra?: Partial<
     Pick<
       PumpEntryExclusion,
+      | "score"
+      | "turnover"
       | "isMonday"
       | "isMondayOpenWindow"
       | "weekendRiskCount"
@@ -212,7 +220,10 @@ export function selectPumpEntryCandidates(params: PumpSelectParams): PumpSelectR
 
     if (headroom === null || headroom < minHeadroomToUpperLimitPct) {
       excluded.push(
-        buildExclusion(r.symbol, "low_upper_limit_headroom", q, upper, headroom)
+        buildExclusion(r.symbol, "low_upper_limit_headroom", q, upper, headroom, {
+          score: r.score,
+          turnover: r.turnover,
+        })
       );
       continue;
     }
@@ -235,6 +246,8 @@ export function selectPumpEntryCandidates(params: PumpSelectParams): PumpSelectR
           upper,
           headroom,
           {
+            score: r.score,
+            turnover: r.turnover,
             minRequiredPct: minCostPct,
             estimatedMovePct,
             costEdgeThresholdPct,
@@ -247,6 +260,8 @@ export function selectPumpEntryCandidates(params: PumpSelectParams): PumpSelectR
     if (mondayFilterEnabled && isMondayOpenBlockWindow) {
       excluded.push(
         buildExclusion(r.symbol, "monday_open_block", q, upper, headroom, {
+          score: r.score,
+          turnover: r.turnover,
           isMonday: mondayIsMonday,
           isMondayOpenWindow: true,
         })
@@ -274,6 +289,8 @@ export function selectPumpEntryCandidates(params: PumpSelectParams): PumpSelectR
           : "overextended_from_prev_close";
       excluded.push(
         buildExclusion(r.symbol, gapReason, q, upper, headroom, {
+          score: r.score,
+          turnover: r.turnover,
           isMonday: mondayIsMonday,
           isMondayOpenWindow: isMondayOpenBlockWindow,
           effectiveGapLimitPct,
@@ -284,7 +301,10 @@ export function selectPumpEntryCandidates(params: PumpSelectParams): PumpSelectR
 
     if (wickPct != null && wickPct > maxUpperWickRatioPct) {
       excluded.push(
-        buildExclusion(r.symbol, "excessive_upper_wick", q, upper, headroom)
+        buildExclusion(r.symbol, "excessive_upper_wick", q, upper, headroom, {
+          score: r.score,
+          turnover: r.turnover,
+        })
       );
       continue;
     }
@@ -302,6 +322,8 @@ export function selectPumpEntryCandidates(params: PumpSelectParams): PumpSelectR
           upper,
           headroom,
           {
+            score: r.score,
+            turnover: r.turnover,
             isMonday: mondayIsMonday,
             isMondayOpenWindow: isMondayOpenBlockWindow,
             weekendRiskCount: weekendRiskEval.riskCount,
@@ -334,6 +356,8 @@ export function selectPumpEntryCandidates(params: PumpSelectParams): PumpSelectR
             usRiskEvaluation.reasons
           )
         );
+        excluded[excluded.length - 1].score = r.score;
+        excluded[excluded.length - 1].turnover = r.turnover;
         continue;
       }
       penalty += usRiskScorePenalty;
@@ -353,7 +377,12 @@ export function selectPumpEntryCandidates(params: PumpSelectParams): PumpSelectR
     if (effectiveScore < entryMinScore) continue;
     if (seen.has(row.symbol)) continue;
     seen.add(row.symbol);
-    picks.push({ symbol: row.symbol, score: effectiveScore, reason: row.reason });
+    picks.push({
+      symbol: row.symbol,
+      score: effectiveScore,
+      reason: row.reason,
+      candidate_at: row.candidate_at,
+    });
     if (picks.length >= maxEntriesThisTick) break;
   }
   return { picks, excluded };

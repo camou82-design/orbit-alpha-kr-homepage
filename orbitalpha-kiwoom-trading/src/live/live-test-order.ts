@@ -14,6 +14,7 @@ import {
   incrementLiveTestOrdersToday,
 } from "./live-test-order-state.js";
 import { mergeMonitorSnapshot } from "../infra/monitor-snapshot.js";
+import { evaluateScore } from "../core/scoring.js";
 
 /** Must match `LIVE_TEST_ORDER_CONFIRM` env exactly to allow a real test buy. */
 export const LIVE_TEST_ORDER_CONFIRM_VALUE = "EXECUTE_TEST_BUY_ONCE";
@@ -167,6 +168,14 @@ export async function submitLiveTestBuyOrderOnce(
     return;
   }
 
+  // Strategy context logging for visibility (pre-execution review requirement)
+  const strategyEval = evaluateScore({
+    price,
+    prevClose: quoteResult.prevClose ?? 0,
+    turnover: quoteResult.turnover ?? 0,
+    isTradable: true,
+  });
+
   const ordUv = String(Math.round(price));
   const body: Record<string, unknown> = {
     dmst_stex_tp: "KRX",
@@ -182,6 +191,8 @@ export async function submitLiveTestBuyOrderOnce(
     qty: 1,
     ord_uv: ordUv,
     trde_tp: "0",
+    strategy_score: strategyEval.score,
+    strategy_reason: strategyEval.reason,
   });
 
   const tr: KiwoomTrPostResult = await kiwoomTrPost(

@@ -37,10 +37,22 @@ export interface PaperPosition {
   entryPrice: number;
   /** ISO timestamp */
   entryTime: string;
+  /** ISO timestamp - when first identified as candidate */
+  candidateAt: string;
+  /** ISO timestamp - when actual fill occurred */
+  enteredAt: string;
+  /** Categorized reason code (e.g. breakout_confirmed) */
+  entryReasonCode: string;
   /** Loop tick index at entry (for max hold). */
   entryTickIndex: number;
-  /** Running high since entry (for trailing stop). */
+  /** Running high since entry (for trailing stop/MFE). */
   highestPrice: number;
+  /** (highestPrice - entryPrice) / entryPrice * 100 */
+  highestPricePct: number;
+  /** Running low since entry (for MAE). */
+  lowestPrice: number;
+  /** (lowestPrice - entryPrice) / entryPrice * 100 */
+  lowestPricePct: number;
   stopLossPct: number;
   takeProfitPct: number;
   trailingStopPct: number;

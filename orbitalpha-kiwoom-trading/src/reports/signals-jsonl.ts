@@ -3,14 +3,27 @@ import { dirname, join } from "node:path";
 import type { MarketSessionPhase } from "../kiwoom/market-hours.js";
 
 export interface SignalRecord {
+  /** ISO timestamp - when first identified as candidate */
+  candidate_at: string;
+  /** Legacy timestamp field for compatibility */
   timestamp: string;
   sessionPhase: MarketSessionPhase;
   symbol: string;
   price: number;
   turnover: number;
   score: number;
+  /** Scoring reason summary */
   reason: string;
+  /** Whether it passed basic scoring/phase checks */
   candidate: boolean;
+
+  /** CANDIDATE (identified) -> BLOCKED (filtered) | ENTERED (filled) */
+  status: "CANDIDATE" | "BLOCKED" | "ENTERED";
+  /** Normalized representative exclusion code (if BLOCKED) */
+  exclusion_reason?: string | null;
+  /** Auxiliary values (turnover, headroom, wick %, etc) for analysis */
+  exclusion_context?: Record<string, any> | null;
+
   /** Resolved upper limit (KRW), if computable. */
   upperLimitPrice?: number | null;
   /** ((upperLimit - price) / price) * 100 */

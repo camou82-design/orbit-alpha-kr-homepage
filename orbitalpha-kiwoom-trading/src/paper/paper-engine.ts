@@ -132,6 +132,7 @@ async function runOneTick(
         : null;
 
     records.push({
+      candidate_at: now.toISOString(),
       timestamp: now.toISOString(),
       sessionPhase: effectiveSessionPhase,
       symbol: sym,
@@ -140,13 +141,11 @@ async function runOneTick(
       score,
       reason,
       candidate,
+      status: "CANDIDATE",
       upperLimitPrice,
       upperLimitHeadroomPct,
     });
   }
-
-  const jsonlPath = getSignalsJsonlPath(config.signalsDir, now, config.experimentTag);
-  await appendSignalJsonlRecords(jsonlPath, records);
 
   const candidateCount = records.filter((r) => r.candidate).length;
 
@@ -161,13 +160,13 @@ async function runOneTick(
     | undefined;
   let mondayTickInfo:
     | {
-        isMonday: boolean;
-        isMondayOpenWindow: boolean;
-        weekendRiskCount: number;
-        weekendRiskReasons: string[];
-        weekendRiskBlocked: boolean;
-        weekendRiskPenalized: boolean;
-      }
+      isMonday: boolean;
+      isMondayOpenWindow: boolean;
+      weekendRiskCount: number;
+      weekendRiskReasons: string[];
+      weekendRiskBlocked: boolean;
+      weekendRiskPenalized: boolean;
+    }
     | undefined;
 
   if (config.paperTrading) {
@@ -292,12 +291,21 @@ async function runOneTick(
       });
 
       await appendTradeJsonlRecord(tradesPath, {
-        openedAt: position.entryTime,
+        candidate_at: position.candidateAt,
+        entered_at: position.enteredAt,
+        exited_at: now.toISOString(),
+        openedAt: position.enteredAt,
         closedAt: now.toISOString(),
         symbol: position.symbol,
         entryPrice: position.entryPrice,
         exitPrice,
         quantity: position.quantity,
+        entry_reason_code: position.entryReasonCode,
+        exit_reason_code: closeReason,
+        mfe_pct: position.highestPricePct,
+        mfe_krw: (position.highestPrice - position.entryPrice) * (position.quantity ?? 1),
+        mae_pct: position.lowestPricePct,
+        mae_krw: (position.lowestPrice - position.entryPrice) * (position.quantity ?? 1),
         pnlPct,
         pnlKrw,
         grossPnlKrw: cost.grossPnlKrw,
@@ -384,30 +392,30 @@ async function runOneTick(
           currentPrice: e.currentPrice,
           ...(e.reason === "us_risk_off" && e.globalRiskSnapshot
             ? {
-                usRiskOff: true,
-                usRiskReasons: e.usRiskReasons,
-                nasdaqFuturesPct: e.globalRiskSnapshot.nasdaqFuturesPct,
-                usdkrwChangePct: e.globalRiskSnapshot.usdkrwChangePct,
-                kospi200FuturesPct: e.globalRiskSnapshot.kospi200FuturesPct,
-              }
+              usRiskOff: true,
+              usRiskReasons: e.usRiskReasons,
+              nasdaqFuturesPct: e.globalRiskSnapshot.nasdaqFuturesPct,
+              usdkrwChangePct: e.globalRiskSnapshot.usdkrwChangePct,
+              kospi200FuturesPct: e.globalRiskSnapshot.kospi200FuturesPct,
+            }
             : {}),
           ...(e.reason === "monday_open_block" ||
-          e.reason === "monday_weekend_risk_block" ||
-          e.reason === "monday_gap_overextended"
+            e.reason === "monday_weekend_risk_block" ||
+            e.reason === "monday_gap_overextended"
             ? {
-                isMonday: e.isMonday,
-                isMondayOpenWindow: e.isMondayOpenWindow,
-                weekendRiskCount: e.weekendRiskCount,
-                weekendRiskReasons: e.weekendRiskReasons,
-                effectiveGapLimitPct: e.effectiveGapLimitPct,
-              }
+              isMonday: e.isMonday,
+              isMondayOpenWindow: e.isMondayOpenWindow,
+              weekendRiskCount: e.weekendRiskCount,
+              weekendRiskReasons: e.weekendRiskReasons,
+              effectiveGapLimitPct: e.effectiveGapLimitPct,
+            }
             : {}),
           ...(e.reason === "insufficient_edge_after_cost"
             ? {
-                minRequiredPct: e.minRequiredPct,
-                estimatedMovePct: e.estimatedMovePct,
-                costEdgeThresholdPct: e.costEdgeThresholdPct,
-              }
+              minRequiredPct: e.minRequiredPct,
+              estimatedMovePct: e.estimatedMovePct,
+              costEdgeThresholdPct: e.costEdgeThresholdPct,
+            }
             : {}),
         })),
       });
@@ -427,6 +435,8 @@ async function runOneTick(
         quantity: qty,
         entryPrice: entryPx,
         entryTimeIso: now.toISOString(),
+        candidateAtIso: pick.candidate_at,
+        entryReasonCode: pick.reason,
         entryTickIndex: tickIndex,
         stopLossPct: config.paperStopLossPct,
         takeProfitPct: config.paperTakeProfitPct,
@@ -464,6 +474,32 @@ async function runOneTick(
         fillHistory.splice(0, fillHistory.length - 100);
       }
     }
+
+    // Update signal records with selection results
+    const pickSymbols = new Set(picks.map((p) => p.symbol));
+    const excludedMap = new Map<string, PumpEntryExclusion>(
+      excluded.map((e) => [e.symbol, e])
+    );
+
+    for (const r of records) {
+      if (pickSymbols.has(r.symbol)) {
+        r.status = "ENTERED";
+      } else if (excludedMap.has(r.symbol)) {
+        r.status = "BLOCKED";
+        const e = excludedMap.get(r.symbol)!;
+        r.exclusion_reason = e.reason;
+        // Copy context fields excluding the base ones
+        const { symbol, reason, ...context } = e;
+        r.exclusion_context = context;
+      }
+    }
+
+    const signalsJsonlPath = getSignalsJsonlPath(
+      config.signalsDir,
+      now,
+      config.experimentTag
+    );
+    await appendSignalJsonlRecords(signalsJsonlPath, records);
   }
 
   const logPath = getPaperLoopLogPath(config.logsDir, now, config.experimentTag);
@@ -476,7 +512,6 @@ async function runOneTick(
     symbolsFetched: symbols.length,
     filteredCount: filtered.length,
     candidateCount,
-    jsonlPath,
     recordsWritten: records.length,
     openPositions: config.paperTrading ? broker.openCount() : 0,
     openedThisTick: config.paperTrading ? openedThisTick : 0,
@@ -485,22 +520,22 @@ async function runOneTick(
     tradesPath,
     ...(config.paperTrading && config.usFilterEnabled && usRiskTick
       ? {
-          usRiskOff: usRiskTick.evaluation.isRiskOff,
-          nasdaqFuturesPct: usRiskTick.snapshot.nasdaqFuturesPct,
-          usdkrwChangePct: usRiskTick.snapshot.usdkrwChangePct,
-          kospi200FuturesPct: usRiskTick.snapshot.kospi200FuturesPct,
-          usRiskReasons: usRiskTick.evaluation.reasons,
-        }
+        usRiskOff: usRiskTick.evaluation.isRiskOff,
+        nasdaqFuturesPct: usRiskTick.snapshot.nasdaqFuturesPct,
+        usdkrwChangePct: usRiskTick.snapshot.usdkrwChangePct,
+        kospi200FuturesPct: usRiskTick.snapshot.kospi200FuturesPct,
+        usRiskReasons: usRiskTick.evaluation.reasons,
+      }
       : {}),
     ...(config.paperTrading && config.mondayFilterEnabled && mondayTickInfo
       ? {
-          isMonday: mondayTickInfo.isMonday,
-          isMondayOpenWindow: mondayTickInfo.isMondayOpenWindow,
-          weekendRiskCount: mondayTickInfo.weekendRiskCount,
-          weekendRiskReasons: mondayTickInfo.weekendRiskReasons,
-          weekendRiskBlocked: mondayTickInfo.weekendRiskBlocked,
-          weekendRiskPenalized: mondayTickInfo.weekendRiskPenalized,
-        }
+        isMonday: mondayTickInfo.isMonday,
+        isMondayOpenWindow: mondayTickInfo.isMondayOpenWindow,
+        weekendRiskCount: mondayTickInfo.weekendRiskCount,
+        weekendRiskReasons: mondayTickInfo.weekendRiskReasons,
+        weekendRiskBlocked: mondayTickInfo.weekendRiskBlocked,
+        weekendRiskPenalized: mondayTickInfo.weekendRiskPenalized,
+      }
       : {}),
   };
 

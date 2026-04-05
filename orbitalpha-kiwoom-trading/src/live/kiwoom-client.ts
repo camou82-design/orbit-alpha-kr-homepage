@@ -32,6 +32,8 @@ export interface KiwoomQuoteResult {
   ok: boolean;
   symbol: string;
   lastPrice?: number | null;
+  prevClose?: number | null;
+  turnover?: number | null;
   message: string;
 }
 
@@ -301,14 +303,14 @@ export async function fetchAccountInfo(
     rows.length > 0
       ? summarizeHoldings(rows)
       : fromTop ?? {
-          ...zeroCashSummary(),
-          totalEvalKrw: 0,
-          totalCostKrw: 0,
-          totalEvalPnlKrw: 0,
-          totalReturnPct: 0,
-          totalNetPnlKrw: 0,
-          note: "체결잔고 없음 (TR 응답 정상)",
-        };
+        ...zeroCashSummary(),
+        totalEvalKrw: 0,
+        totalCostKrw: 0,
+        totalEvalPnlKrw: 0,
+        totalReturnPct: 0,
+        totalNetPnlKrw: 0,
+        note: "체결잔고 없음 (TR 응답 정상)",
+      };
 
   if (topRec) {
     summary = enrichSummaryWithKt00005Cash(topRec, summary);
@@ -382,6 +384,62 @@ function extractLastPrice(json: unknown): number | null {
   return null;
 }
 
+function extractPrevClosePrice(json: unknown): number | null {
+  if (json === null || json === undefined) return null;
+  const rec = json as Record<string, unknown>;
+  const keys = ["stck_sdpr", "prev_close", "sdpr", "pre_close"];
+
+  for (const k of keys) {
+    if (k in rec) {
+      const n = pickNumeric(rec[k], []);
+      if (Number.isFinite(n) && n > 0) return n;
+    }
+  }
+
+  const out = rec.output;
+  if (out && typeof out === "object" && !Array.isArray(out)) {
+    const o = out as Record<string, unknown>;
+    const p = numFromRow(o, keys);
+    if (Number.isFinite(p) && p > 0) return p;
+  }
+
+  const arr = firstOutputArray(json);
+  if (arr.length > 0) {
+    const p = numFromRow(arr[0], keys);
+    if (Number.isFinite(p) && p > 0) return p;
+  }
+
+  return null;
+}
+
+function extractTurnover(json: unknown): number | null {
+  if (json === null || json === undefined) return null;
+  const rec = json as Record<string, unknown>;
+  const keys = ["acml_tr_pbmn", "tr_amt", "turnover", "acml_vol_amt"];
+
+  for (const k of keys) {
+    if (k in rec) {
+      const n = pickNumeric(rec[k], []);
+      if (Number.isFinite(n) && n >= 0) return n;
+    }
+  }
+
+  const out = rec.output;
+  if (out && typeof out === "object" && !Array.isArray(out)) {
+    const o = out as Record<string, unknown>;
+    const p = numFromRow(o, keys);
+    if (Number.isFinite(p) && p >= 0) return p;
+  }
+
+  const arr = firstOutputArray(json);
+  if (arr.length > 0) {
+    const p = numFromRow(arr[0], keys);
+    if (Number.isFinite(p) && p >= 0) return p;
+  }
+
+  return null;
+}
+
 export async function fetchQuote(
   logger: Logger,
   config: AppConfig,
@@ -440,6 +498,9 @@ export async function fetchQuote(
   }
 
   const lastPrice = extractLastPrice(tr.json);
+  const prevClose = extractPrevClosePrice(tr.json);
+  const turnover = extractTurnover(tr.json);
+
   if (lastPrice === null) {
     const shape = describeJsonShape(tr.json);
     logger.info("quote.real.debug", {
@@ -460,7 +521,7 @@ export async function fetchQuote(
     return { ok: false, symbol: sym, message: "could not parse last price" };
   }
 
-  logger.info("kiwoom.quote", { msg: "fetch ok", symbol: sym, lastPrice });
+  logger.info("kiwoom.quote", { msg: "fetch ok", symbol: sym, lastPrice, prevClose, turnover });
   logger.info("quote.real.debug", {
     msg: "quote real parse",
     endpoint: config.kiwoomRestStkPath,
@@ -478,6 +539,8 @@ export async function fetchQuote(
     ok: true,
     symbol: sym,
     lastPrice,
+    prevClose,
+    turnover,
     message: "ok",
   };
 }
