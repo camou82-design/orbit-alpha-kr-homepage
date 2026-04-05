@@ -11,6 +11,15 @@ import type {
 } from "../infra/monitor-snapshot.js";
 import { getMonitorStatusPathForServer } from "../infra/monitor-snapshot.js";
 import { hrefToPaperDashboard } from "../infra/cross-nav-links.js";
+import { computeLiveOpsBanner } from "../infra/live-ops-banner.js";
+import {
+  dashboardDefaultReturnPathLive,
+  dashboardHttpAuthEnabled,
+  dashboardSessionSecretOk,
+  requireDashboardSession,
+  sendNoStoreHeaders,
+  tryDashboardAuthRoutes,
+} from "../infra/dashboard-http-auth.js";
 
 const HOST = process.env.MONITOR_HOST?.trim() || "127.0.0.1";
 const PORT = Number(process.env.MONITOR_PORT ?? 3001);
@@ -143,9 +152,6 @@ function renderPage(
 
   const configLoaded = data?.configLoaded as Record<string, unknown> | undefined;
   const kiwoomConfigured = configLoaded?.kiwoomConnectionConfigured === true;
-  const liveTradingFlag = configLoaded?.liveTradingEnabled;
-  const liveTradingKnown = typeof liveTradingFlag === "boolean";
-  const liveTradingEnabled = liveTradingFlag === true;
   const liveTestFlag = configLoaded?.liveTestOrderEnabled;
   const liveTestOrderEnvKnown = typeof liveTestFlag === "boolean";
   const liveTestOrderEnabled = liveTestFlag === true;
@@ -159,11 +165,20 @@ function renderPage(
   const warnStrip =
     liveTestOrderEligible === true
       ? `<strong>경고</strong>: 테스트 주문 가드 통과 — 이 실행에서 <strong>지정가 신규매수 1주</strong>가 전송될 수 있습니다. 전략 루프·자동 실주문은 비활성입니다. UI 주문 버튼 없음.`
-      : `전략 자동 실주문 <strong>비활성</strong>(기본) · 제한 테스트 주문은 <code>LIVE_TEST_*</code> 가드 충족 시에만 · 주문 UI 없음`;
+      : "";
+
+  const ops = computeLiveOpsBanner(data);
 
   const staleNote = snapshotStale
     ? `<span class="muted" style="display:block;margin-top:0.25rem;color:#856404"><strong>스냅샷 주의:</strong> 이 JSON이 구버전이거나 엔진이 이 경로에서 쓰지 않은 파일일 수 있습니다. 엔진을 <strong>orbitalpha-kiwoom-trading</strong> 루트에서 다시 실행하거나 <code>/api/status</code>의 <code>configLoaded.monitorStatusFilePath</code>를 확인하세요.</span>`
     : "";
+
+  const stCls = (s: string): string =>
+    s === "주문 가능" || s === "가능" || s === "YES"
+      ? "state-ok"
+      : s === "제한됨" || s === "제한"
+        ? "state-warn"
+        : "state-bad";
 
   return `<!DOCTYPE html>
 <html lang="ko">
@@ -214,11 +229,51 @@ function renderPage(
       white-space: nowrap;
     }
     a.toplink:hover { background: rgba(255, 255, 255, 0.22); }
+    .btn-row { display: flex; flex-wrap: wrap; gap: 0.35rem; align-items: center; justify-content: flex-end; }
+    button.topbtn {
+      display: inline-block;
+      padding: 0.28rem 0.6rem;
+      font-size: 12px;
+      font-weight: 600;
+      color: #fff;
+      background: rgba(255, 255, 255, 0.12);
+      border: 1px solid rgba(255, 255, 255, 0.38);
+      border-radius: 3px;
+      cursor: pointer;
+      font-family: inherit;
+    }
+    button.topbtn:hover:not(:disabled) { background: rgba(255, 255, 255, 0.22); }
+    button.topbtn.kill-soon { opacity: 0.55; cursor: not-allowed; }
+    .ops-banner {
+      background: #fff;
+      border-bottom: 2px solid #2f4f6f;
+      padding: 0.65rem 1rem 0.55rem;
+    }
+    .ops-banner h2 { margin: 0 0 0.45rem 0; font-size: 13px; color: #1e3a52; }
+    .ops-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(13.5rem, 1fr));
+      gap: 0.35rem 0.75rem;
+      font-size: 12px;
+    }
+    .ops-line .k { color: #555; }
+    .ops-line .v { font-weight: 700; margin-left: 0.2rem; }
+    .state-ok { color: #1b5e20; }
+    .state-warn { color: #e65100; }
+    .state-bad { color: #b00020; }
     .warn-strip {
       background: #fff3cd;
       border-bottom: 1px solid #e0c766;
       padding: 0.35rem 1rem;
       font-size: 12px;
+    }
+    details.dev-details { margin-top: 0.65rem; border: 1px solid #c5cbd3; background: #fafbfc; padding: 0 0.5rem 0.5rem; }
+    details.dev-details > summary {
+      cursor: pointer;
+      font-weight: 700;
+      font-size: 12px;
+      padding: 0.45rem 0.15rem;
+      color: #333;
     }
     .wrap { max-width: 1200px; margin: 0 auto; padding: 0.6rem 1rem 1.5rem; }
     .sum-grid {
@@ -308,21 +363,30 @@ function renderPage(
 <body>
   <div class="topbar">
     <div class="topbar-row">
-      <div><strong>${esc(APP_TITLE)}</strong> · <span class="sub">로컬 계좌형 모니터 (read-only)</span></div>
-      <a class="toplink" href="${esc(hrefPaper)}">PAPER 급등주 모의매매 열기</a>
+      <div><strong>${esc(APP_TITLE)}</strong> · <span class="sub">실주문 계열 운영 모니터 (read-only)</span></div>
+      <div class="btn-row">
+        <button type="button" class="topbtn kill-soon" disabled title="다음 단계에서 긴급 차단 로직 연결 예정">긴급 중단</button>
+        <a class="toplink" href="${esc(hrefPaper)}">PAPER 급등주 모의매매 열기</a>
+        <button type="button" class="topbtn" id="btnLogout">로그아웃</button>
+      </div>
     </div>
-    <div class="sub">127.0.0.1 only · 자동 갱신 약 ${String(REFRESH_SEC)}초 · 스냅샷: ${esc(lastLogAt)}</div>
+    <div class="sub">자동 갱신 약 ${String(REFRESH_SEC)}초 · 스냅샷: ${esc(lastLogAt)}</div>
   </div>
-  <div class="warn-strip">
-    ${warnStrip}
-    <span class="muted" style="display:block;margin-top:0.25rem">LIVE_TRADING_ENABLED=${esc(
-      String(liveTradingEnabled)
-    )} · LIVE_TEST_ORDER_ENABLED=${esc(String(liveTestOrderEnabled))}</span>
+  <div class="ops-banner">
+    <h2>운영 상태 요약</h2>
+    <div class="ops-grid">
+      <div class="ops-line"><span class="k">운영 상태:</span> <span class="v ${stCls(ops.overallState)}">${esc(ops.overallState)}</span></div>
+      <div class="ops-line"><span class="k">실주문 가능:</span> <span class="v ${stCls(ops.realOrderYesNo)}">${esc(ops.realOrderYesNo)}</span></div>
+      <div class="ops-line" style="grid-column: 1 / -1"><span class="k">차단 사유:</span> <span class="v">${esc(ops.blockReasonLine)}</span></div>
+      <div class="ops-line"><span class="k">장 상태:</span> <span class="v">${esc(ops.sessionMarket)}</span></div>
+      <div class="ops-line"><span class="k">계좌 조회:</span> <span class="v">${esc(ops.accountLookup)}</span></div>
+      <div class="ops-line"><span class="k">시세 수신:</span> <span class="v">${esc(ops.quoteReceive)}</span></div>
+      <div class="ops-line"><span class="k">LIVE 설정:</span> <span class="v">${esc(ops.liveConfigOnOff)}</span> <span class="k" style="margin-left:0.5rem">(환경 LIVE_TRADING 게이트)</span></div>
+      <div class="ops-line"><span class="k">실제 주문 상태:</span> <span class="v ${stCls(ops.actualOrderState)}">${esc(ops.actualOrderState)}</span> <span class="k" style="margin-left:0.5rem">(가드·장·연동 결과)</span></div>
+    </div>
   </div>
+  ${warnStrip ? `<div class="warn-strip">${warnStrip}</div>` : ""}
   <div class="wrap">
-    ${startupError ? `<p class="err">시작 오류: ${esc(startupError)}</p>` : ""}
-    ${livePathError ? `<p class="err">Live 경로: ${esc(livePathError)}</p>` : ""}
-
     <div class="sum-grid">
       <div class="sum-cell">
         <div class="label">총 평가금액</div>
@@ -345,10 +409,6 @@ function renderPage(
         <div class="val ${krPnlClass(sum.totalNetPnlKrw)}">${fmtKrw(sum.totalNetPnlKrw)}</div>
       </div>
       <div class="sum-cell">
-        <div class="label">LIVE_TRADING (전략 게이트)</div>
-        <div class="val small">${!liveTradingKnown ? "—" : liveTradingEnabled ? "on" : "off"}</div>
-      </div>
-      <div class="sum-cell">
         <div class="label">실잔고 조회</div>
         <div class="val small">${accountRealFetchOk === undefined ? "—" : accountRealFetchOk ? "성공" : "실패"}</div>
       </div>
@@ -363,6 +423,10 @@ function renderPage(
       <div class="sum-cell">
         <div class="label">오늘 테스트 주문 횟수</div>
         <div class="val small">${liveTestOrdersToday === undefined ? "—" : esc(String(liveTestOrdersToday))}</div>
+      </div>
+      <div class="sum-cell">
+        <div class="label">LIVE_TEST 환경</div>
+        <div class="val small">${!liveTestOrderEnvKnown ? "—" : liveTestOrderEnabled ? "on" : "off"}</div>
       </div>
     </div>
 
@@ -419,48 +483,93 @@ function renderPage(
       </table>
     </div>
 
-    <div class="foot">
-      <div class="foot-box">
-        <h3>연결·조회</h3>
-        <div class="line"><span class="muted">연결 상태:</span> ${esc(connectionStatus)}</div>
-        <div class="line"><span class="muted">키움 env:</span> ${kiwoomConfigured ? "configured" : "not configured"}</div>
-        <div class="line"><span class="muted">스냅샷 파일 (엔진 cwd):</span> ${esc(
-          typeof configLoaded?.monitorStatusFilePath === "string"
-            ? (configLoaded.monitorStatusFilePath as string)
-            : "— (구 스냅샷)"
-        )}</div>
-        <div class="line"><span class="muted">계좌 조회 시각:</span> ${esc(accountQueriedAt)}</div>
-        <div class="line"><span class="muted">시세 조회 시각:</span> ${esc(quoteQueriedAt)}</div>
-        <div class="line"><span class="muted">마지막 심볼:</span> ${esc(String(lastSymbol))}</div>
+    <details class="dev-details">
+      <summary>개발자·내부 판정 정보 (기본 접힘)</summary>
+      ${staleNote}
+      ${startupError ? `<p class="err">시작 오류(원문): ${esc(startupError)}</p>` : ""}
+      ${livePathError ? `<p class="err">Live 경로(원문): ${esc(livePathError)}</p>` : ""}
+      <div class="foot">
+        <div class="foot-box">
+          <h3>연결·조회</h3>
+          <div class="line"><span class="muted">연결 상태:</span> ${esc(connectionStatus)}</div>
+          <div class="line"><span class="muted">키움 env:</span> ${kiwoomConfigured ? "configured" : "not configured"}</div>
+          <div class="line"><span class="muted">엔진 entryMode:</span> ${esc(entryMode)}</div>
+          <div class="line"><span class="muted">스냅샷 파일 (엔진 cwd):</span> ${esc(
+            typeof configLoaded?.monitorStatusFilePath === "string"
+              ? (configLoaded.monitorStatusFilePath as string)
+              : "— (구 스냅샷)"
+          )}</div>
+          <div class="line"><span class="muted">계좌 조회 시각:</span> ${esc(accountQueriedAt)}</div>
+          <div class="line"><span class="muted">시세 조회 시각:</span> ${esc(quoteQueriedAt)}</div>
+          <div class="line"><span class="muted">마지막 심볼:</span> ${esc(String(lastSymbol))}</div>
+        </div>
+        <div class="foot-box">
+          <h3>dry-run 판정 (내부)</h3>
+          <div class="line"><span class="muted">allowed:</span> ${allowed === undefined ? "—" : esc(String(allowed))}</div>
+          <div class="line"><span class="muted">reasons (내부 코드):</span> ${blockReasons?.length ? esc(blockReasons.join(", ")) : "—"}</div>
+          <div class="line muted" style="margin-top:0.4rem">서버 렌더: ${esc(now)}</div>
+        </div>
+        <div class="foot-box">
+          <h3>테스트 실주문 (가드·원시)</h3>
+          <div class="line"><span class="muted">마지막 결과:</span> ${lastLiveTestOrderResult ? esc(JSON.stringify(lastLiveTestOrderResult)) : "—"}</div>
+          <div class="line muted" style="margin-top:0.35rem">가드 미통과 시 broker 호출 없음 · 매도·시장가·복수종목 없음</div>
+        </div>
       </div>
-      <div class="foot-box">
-        <h3>dry-run 판정</h3>
-        <div class="line"><span class="muted">allowed:</span> ${allowed === undefined ? "—" : esc(String(allowed))}</div>
-        <div class="line"><span class="muted">차단 사유:</span> ${blockReasons?.length ? esc(blockReasons.join(", ")) : "—"}</div>
-        <div class="line muted" style="margin-top:0.4rem">서버 렌더: ${esc(now)}</div>
-      </div>
-      <div class="foot-box">
-        <h3>테스트 실주문 (가드)</h3>
-        <div class="line"><span class="muted">마지막 결과:</span> ${lastLiveTestOrderResult ? esc(JSON.stringify(lastLiveTestOrderResult)) : "—"}</div>
-        <div class="line muted" style="margin-top:0.35rem">가드 미통과 시 broker 호출 없음 · 매도·시장가·복수종목 없음</div>
-      </div>
-    </div>
-
-    <details class="raw">
-      <summary>원문 JSON 보기</summary>
-      <pre class="raw">${jsonBlock}</pre>
+      <details class="raw">
+        <summary>원문 JSON 보기</summary>
+        <pre class="raw">${jsonBlock}</pre>
+      </details>
     </details>
   </div>
+  <script>
+(function(){
+  var el = document.getElementById("btnLogout");
+  if (!el) return;
+  el.addEventListener("click", function(){
+    if (!confirm("로그아웃 하시겠습니까?")) return;
+    fetch("auth/logout", { method: "POST", credentials: "include", redirect: "follow" })
+      .then(function(r){ location.replace(r.url || "auth/login"); })
+      .catch(function(){ location.replace("auth/login"); });
+  });
+  if (window.history && window.history.replaceState) {
+    history.replaceState(null, "", location.href);
+  }
+})();
+  </script>
 </body>
 </html>`;
 }
 
-function handleRequest(
+function pathOnly(url: string): string {
+  const noHash = url.split("#")[0] ?? "/";
+  const q = noHash.indexOf("?");
+  return q < 0 ? noHash : noHash.slice(0, q);
+}
+
+function queryString(url: string): string {
+  const noHash = url.split("#")[0] ?? "";
+  const q = noHash.indexOf("?");
+  return q < 0 ? "" : noHash.slice(q + 1);
+}
+
+async function handleMonitorRequest(
   req: import("node:http").IncomingMessage,
-  url: string,
   res: import("node:http").ServerResponse
-): void {
-  if (url === "/" || url.startsWith("/?")) {
+): Promise<void> {
+  const rawUrl = req.url ?? "/";
+  const p = pathOnly(rawUrl);
+  const qs = queryString(rawUrl);
+
+  if (await tryDashboardAuthRoutes(req, res, p, qs, dashboardDefaultReturnPathLive()))
+    return;
+
+  if (p === "/" || p === "") {
+    if (req.method !== "GET") {
+      res.writeHead(405, { "Content-Type": "text/plain; charset=utf-8" });
+      res.end("method not allowed");
+      return;
+    }
+    if (!requireDashboardSession(req, res, dashboardDefaultReturnPathLive())) return;
     const path = getMonitorStatusPathForServer();
     let raw: string | null = null;
     let data: Record<string, unknown> | null = null;
@@ -473,13 +582,22 @@ function handleRequest(
         data = null;
       }
     }
+    if (dashboardHttpAuthEnabled()) sendNoStoreHeaders(res);
     res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
     res.end(renderPage(raw, data, hrefToPaperDashboard(req)));
     return;
   }
-  if (url === "/api/status") {
-    const path = getMonitorStatusPathForServer();
-    if (!existsSync(path)) {
+
+  if (p === "/api/status") {
+    if (req.method !== "GET") {
+      res.writeHead(405, { "Content-Type": "text/plain; charset=utf-8" });
+      res.end("method not allowed");
+      return;
+    }
+    if (!requireDashboardSession(req, res, dashboardDefaultReturnPathLive())) return;
+    const statusPath = getMonitorStatusPathForServer();
+    if (!existsSync(statusPath)) {
+      if (dashboardHttpAuthEnabled()) sendNoStoreHeaders(res);
       res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
       res.end(
         JSON.stringify(
@@ -494,7 +612,8 @@ function handleRequest(
       return;
     }
     try {
-      const raw = readFileSync(path, "utf8");
+      const raw = readFileSync(statusPath, "utf8");
+      if (dashboardHttpAuthEnabled()) sendNoStoreHeaders(res);
       res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
       res.end(raw);
     } catch (e) {
@@ -503,18 +622,19 @@ function handleRequest(
     }
     return;
   }
-  res.writeHead(404, { "Content-Type": "text/plain" });
+
+  res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
   res.end("not found");
 }
 
 const server = createServer((req, res) => {
-  const url = req.url ?? "/";
-  if (req.method !== "GET") {
-    res.writeHead(405, { "Content-Type": "text/plain" });
-    res.end("method not allowed");
-    return;
-  }
-  handleRequest(req, url.split("#")[0], res);
+  void handleMonitorRequest(req, res).catch((e) => {
+    console.error("[monitor] request error:", e);
+    if (!res.headersSent) {
+      res.writeHead(500, { "Content-Type": "text/plain; charset=utf-8" });
+    }
+    res.end("internal error");
+  });
 });
 
 server.on("error", (err: NodeJS.ErrnoException) => {
@@ -536,4 +656,9 @@ server.listen(PORT, HOST, () => {
   console.log(
     "[monitor] 엔진과 다른 cwd이면 스냅샷이 어긋날 수 있습니다. MONITOR_STATUS_FILE(절대 경로) 또는 KIWOOM_PROJECT_ROOT로 경로를 고정하세요."
   );
+  if (dashboardHttpAuthEnabled() && !dashboardSessionSecretOk()) {
+    console.warn(
+      "[monitor] KIWOOM_DASHBOARD_HTTP_AUTH is on but KIWOOM_DASHBOARD_SESSION_SECRET is missing or too short (min 16)."
+    );
+  }
 });

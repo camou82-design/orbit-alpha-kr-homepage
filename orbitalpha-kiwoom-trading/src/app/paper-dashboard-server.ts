@@ -13,6 +13,15 @@ import type {
 } from "../infra/paper-dashboard-snapshot.js";
 import { getPaperDashboardPathForServer } from "../infra/paper-dashboard-snapshot.js";
 import { hrefToLiveMonitor } from "../infra/cross-nav-links.js";
+import { formatMarketSessionKorean } from "../infra/live-ops-banner.js";
+import {
+  dashboardDefaultReturnPathPaper,
+  dashboardHttpAuthEnabled,
+  dashboardSessionSecretOk,
+  requireDashboardSession,
+  sendNoStoreHeaders,
+  tryDashboardAuthRoutes,
+} from "../infra/dashboard-http-auth.js";
 
 const HOST = process.env.PAPER_DASHBOARD_HOST?.trim() || "127.0.0.1";
 const PORT = Number(process.env.PAPER_DASHBOARD_PORT ?? 3002);
@@ -131,9 +140,9 @@ function renderFills(rows: PaperFillRow[]): string {
 }
 
 function renderPage(data: PaperDashboardSnapshot, rawJson: string, hrefLive: string): string {
+  const sessionKo = formatMarketSessionKorean(data.effectiveSessionPhase);
   const meta = [
     `tick ${data.tickIndex}`,
-    data.effectiveSessionPhase,
     data.experimentTag ? `tag ${data.experimentTag}` : "tag —",
     data.paperTradingEnabled ? "PAPER_TRADING on" : "PAPER_TRADING off",
   ].join(" · ");
@@ -175,6 +184,20 @@ function renderPage(data: PaperDashboardSnapshot, rawJson: string, hrefLive: str
       white-space: nowrap;
     }
     a.banner-link:hover { background: rgba(255, 255, 255, 0.18); }
+    .btn-row { display: flex; flex-wrap: wrap; gap: 0.35rem; align-items: center; justify-content: flex-end; }
+    button.banner-btn {
+      display: inline-block;
+      padding: 0.28rem 0.6rem;
+      font-size: 12px;
+      font-weight: 600;
+      color: #fff;
+      background: rgba(255, 255, 255, 0.1);
+      border: 1px solid rgba(201, 162, 39, 0.65);
+      border-radius: 3px;
+      cursor: pointer;
+      font-family: inherit;
+    }
+    button.banner-btn:hover { background: rgba(255, 255, 255, 0.18); }
     .wrap { max-width: 1280px; margin: 0 auto; padding: 0.6rem 1rem 1.2rem; }
     .panel-title {
       background: #d9dee6; border: 1px solid #b8c0cc; border-bottom: none;
@@ -204,10 +227,13 @@ function renderPage(data: PaperDashboardSnapshot, rawJson: string, hrefLive: str
 <body>
   <div class="banner">
     <div class="banner-row">
-      <div><strong>PAPER ONLY</strong> — LIVE와 완전 분리 · 실주문 없음 · 모의 시뮬레이션 전용</div>
-      <a class="banner-link" href="${esc(hrefLive)}">LIVE 계좌 모니터로 이동</a>
+      <div><strong>PAPER ONLY</strong> — 실계좌·실주문과 완전 분리 · 키움 실주문 없음 · 모의 시뮬레이션 전용 (운영 중에도 LIVE와 혼동 금지)</div>
+      <div class="btn-row">
+        <a class="banner-link" href="${esc(hrefLive)}">LIVE 계좌 모니터로 이동</a>
+        <button type="button" class="banner-btn" id="btnLogout">로그아웃</button>
+      </div>
     </div>
-    <div class="sub">${esc(TITLE)} · 자동 갱신 약 ${String(REFRESH_SEC)}초 · ${esc(meta)} · 갱신 ${esc(data.lastUpdated)}</div>
+    <div class="sub"><strong>현재 상태:</strong> ${esc(sessionKo)} · ${esc(TITLE)} · 자동 갱신 약 ${String(REFRESH_SEC)}초 · ${esc(meta)} · 갱신 ${esc(data.lastUpdated)}</div>
   </div>
   <div class="wrap">
     <div class="panel-title">급등주 후보</div>
@@ -259,30 +285,96 @@ function renderPage(data: PaperDashboardSnapshot, rawJson: string, hrefLive: str
       <pre class="raw">${escPre(rawJson)}</pre>
     </details>
   </div>
+  <script>
+(function(){
+  var el = document.getElementById("btnLogout");
+  if (!el) return;
+  el.addEventListener("click", function(){
+    if (!confirm("로그아웃 하시겠습니까?")) return;
+    fetch("auth/logout", { method: "POST", credentials: "include", redirect: "follow" })
+      .then(function(r){ location.replace(r.url || "auth/login"); })
+      .catch(function(){ location.replace("auth/login"); });
+  });
+  if (window.history && window.history.replaceState) {
+    history.replaceState(null, "", location.href);
+  }
+})();
+  </script>
 </body>
 </html>`;
 }
 
-const server = createServer((req, res) => {
-  if (req.url === "/api/paper-dashboard" || req.url?.startsWith("/api/paper-dashboard?")) {
+function pathOnly(url: string): string {
+  const noHash = url.split("#")[0] ?? "/";
+  const q = noHash.indexOf("?");
+  return q < 0 ? noHash : noHash.slice(0, q);
+}
+
+function queryString(url: string): string {
+  const noHash = url.split("#")[0] ?? "";
+  const q = noHash.indexOf("?");
+  return q < 0 ? "" : noHash.slice(q + 1);
+}
+
+async function handlePaperRequest(
+  req: import("node:http").IncomingMessage,
+  res: import("node:http").ServerResponse
+): Promise<void> {
+  const rawUrl = req.url ?? "/";
+  const p = pathOnly(rawUrl);
+  const qs = queryString(rawUrl);
+
+  if (await tryDashboardAuthRoutes(req, res, p, qs, dashboardDefaultReturnPathPaper()))
+    return;
+
+  if (p === "/api/paper-dashboard") {
+    if (req.method !== "GET") {
+      res.writeHead(405, { "Content-Type": "text/plain; charset=utf-8" });
+      res.end("method not allowed");
+      return;
+    }
+    if (!requireDashboardSession(req, res, dashboardDefaultReturnPathPaper())) return;
     const data = loadSnapshot();
+    if (dashboardHttpAuthEnabled()) sendNoStoreHeaders(res);
     res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
     res.end(JSON.stringify(data, null, 2));
     return;
   }
-  if (req.url === "/" || req.url === "/index.html") {
+  if (p === "/" || p === "/index.html") {
+    if (req.method !== "GET") {
+      res.writeHead(405, { "Content-Type": "text/plain; charset=utf-8" });
+      res.end("method not allowed");
+      return;
+    }
+    if (!requireDashboardSession(req, res, dashboardDefaultReturnPathPaper())) return;
     const data = loadSnapshot();
     const rawJson = JSON.stringify(data, null, 2);
+    if (dashboardHttpAuthEnabled()) sendNoStoreHeaders(res);
     res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
     res.end(renderPage(data, rawJson, hrefToLiveMonitor(req)));
     return;
   }
-  res.writeHead(404, { "Content-Type": "text/plain" });
+  res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
   res.end("not found");
+}
+
+const server = createServer((req, res) => {
+  void handlePaperRequest(req, res).catch((e) => {
+    console.error("[paper-dashboard] request error:", e);
+    if (!res.headersSent) {
+      res.writeHead(500, { "Content-Type": "text/plain; charset=utf-8" });
+    }
+    res.end("internal error");
+  });
 });
 
 server.listen(PORT, HOST, () => {
   console.log(`[paper-dashboard] ${TITLE}`);
   console.log(`[paper-dashboard] http://${HOST}:${PORT}/  (read-only, paper JSON only)`);
   console.log(`[paper-dashboard] file: ${getPaperDashboardPathForServer()}`);
+  if (dashboardHttpAuthEnabled() && !dashboardSessionSecretOk()) {
+    console.warn(
+      "[paper-dashboard] KIWOOM_DASHBOARD_HTTP_AUTH is on but KIWOOM_DASHBOARD_SESSION_SECRET is missing or too short (min 16)."
+    );
+  }
 });
