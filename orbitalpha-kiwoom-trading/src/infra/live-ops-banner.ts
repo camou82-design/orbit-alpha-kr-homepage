@@ -1,6 +1,13 @@
 /**
- * 운영자용 LIVE 모니터 상단 배너 문구 (스냅샷 JSON 기준, reasons 원문 노출 없음).
+ * 운영자용 LIVE 모니터 상단 배너 (스냅샷 + live-ops-state + 운영 가드).
  */
+
+import type { AppConfig } from "./config.js";
+import type { LiveOpsStateFile } from "../live/live-ops-state.js";
+import {
+  evaluateLiveOperationalOrderGate,
+  liveOpsEnvWarningsForBanner,
+} from "../live/live-ops-guard.js";
 
 export type LiveOpsOrderState = "가능" | "제한" | "차단";
 
@@ -13,6 +20,20 @@ export interface LiveOpsBannerModel {
   quoteReceive: "정상" | "지연" | "실패" | "미확인";
   liveConfigOnOff: "ON" | "OFF";
   actualOrderState: LiveOpsOrderState;
+}
+
+export interface LiveOpsExtendedBanner {
+  killSwitchLine: string;
+  ordersToday: string;
+  ordersMax: string;
+  ordersRemaining: string;
+  dailyPnlLine: string;
+  lossLimitLine: string;
+  opsBlockedLine: string;
+  reentryLine: string;
+  lastAttempt: string;
+  lastSuccess: string;
+  lastFailure: string;
 }
 
 const REASON_KO: Record<string, string> = {
@@ -28,14 +49,14 @@ const REASON_KO: Record<string, string> = {
   live_test_order_disabled: "테스트 실주문 환경 설정이 꺼져 있습니다",
   live_test_confirm_mismatch: "테스트 주문 확인 문구가 일치하지 않습니다",
   live_test_symbol_blocked: "허용되지 않은 종목 코드입니다",
-  live_test_daily_cap: "일일 테스트 주문 횟수 상한에 도달했습니다",
+  live_test_daily_cap: "오늘 테스트 주문 횟수 상한에 도달했습니다",
   live_test_max_qty_must_be_1: "테스트 주문 수량은 1주만 허용됩니다",
   live_test_max_orders_per_day_must_be_1: "일일 테스트 주문 상한 설정이 요구사항과 맞지 않습니다",
   live_test_allowed_symbol_missing: "허용 종목 코드가 비어 있습니다",
   symbol_not_allowed_for_live_test: "허용 목록에 없는 종목입니다",
   live_test_order_confirm_not_set_or_invalid: "테스트 주문 확인 문구가 설정되지 않았거나 올바르지 않습니다",
   side_must_be_buy: "테스트 주문은 매수만 허용됩니다",
-  qty_must_be_1: "테스트 주문 수량은 1주여야 합니다",
+  qty_must_be_1: "테스트 주문은 1주여야 합니다",
   kiwoom_not_configured: "키움 연동이 구성되지 않았습니다",
   account_fetch_not_ok: "계좌 조회 결과가 유효하지 않아 테스트 주문이 제한됩니다",
   quote_missing_or_invalid_price: "시세가 없거나 가격이 유효하지 않습니다",
@@ -91,10 +112,10 @@ function quoteStale(quoteAt: string | undefined, staleSec: number): boolean {
   return (Date.now() - t) / 1000 > staleSec;
 }
 
-/**
- * 스냅샷 레코드로 운영 배너 모델 계산 (JSON/배열 그대로 노출하지 않음).
- */
-export function computeLiveOpsBanner(data: Record<string, unknown> | null): LiveOpsBannerModel {
+/** 스냅샷만 반영 (엔진 연동·장·키움). */
+export function computeSnapshotBannerModel(
+  data: Record<string, unknown> | null
+): LiveOpsBannerModel {
   const startupError = typeof data?.startupError === "string" ? data.startupError : "";
   const livePathError = typeof data?.livePathError === "string" ? data.livePathError : "";
 
@@ -191,4 +212,111 @@ export function computeLiveOpsBanner(data: Record<string, unknown> | null): Live
     liveConfigOnOff,
     actualOrderState,
   };
+}
+
+function fmtKrw(n: number): string {
+  return `${Math.round(n).toLocaleString("ko-KR")}원`;
+}
+
+function reentryDescribe(cfg: AppConfig, ops: LiveOpsStateFile, symbol: string): string {
+  const sym = symbol.trim();
+  const cd = Math.max(0, cfg.liveOpsReentryCooldownMinutes);
+  if (cd <= 0) return "재진입 쿨다운 비활성";
+  const flatAt = ops.symbolLastFlatAt[sym];
+  if (!flatAt) return `종목 ${sym}: 최근 청산 기록 없음 (재진입 허용)`;
+  const t = Date.parse(flatAt);
+  if (Number.isNaN(t)) return `종목 ${sym}: 재진입 허용`;
+  const elapsedMin = (Date.now() - t) / 60_000;
+  if (elapsedMin >= cd) return `종목 ${sym}: 재진입 허용 (쿨다운 경과)`;
+  const left = Math.ceil(cd - elapsedMin);
+  return `종목 ${sym}: 재진입 쿨다운 중 (약 ${left}분 남음)`;
+}
+
+/**
+ * 스냅샷 + 운영 상태 파일 + 운영 가드 병합.
+ */
+export function buildLiveOpsControlRows(
+  data: Record<string, unknown> | null,
+  ops: LiveOpsStateFile,
+  cfg: AppConfig
+): {
+  model: LiveOpsBannerModel;
+  ext: LiveOpsExtendedBanner;
+  envWarnings: string[];
+} {
+  const base = computeSnapshotBannerModel(data);
+  const envWarnings = liveOpsEnvWarningsForBanner();
+  const sym = cfg.liveTestAllowedSymbol.trim() || "005930";
+  const opG = evaluateLiveOperationalOrderGate(cfg, { symbol: sym, side: "BUY" });
+
+  let model: LiveOpsBannerModel;
+
+  const finalPossible =
+    base.actualOrderState === "가능" && opG.ok && !ops.killSwitchActive;
+
+  if (ops.killSwitchActive) {
+    model = {
+      ...base,
+      actualOrderState: "차단",
+      overallState: "차단됨",
+      realOrderYesNo: "NO",
+      blockReasonLine: "긴급 중단이 활성화되어 신규 실주문이 차단된 상태입니다",
+    };
+  } else if (!opG.ok) {
+    model = {
+      ...base,
+      actualOrderState: "차단",
+      overallState: "차단됨",
+      realOrderYesNo: "NO",
+      blockReasonLine:
+        opG.reasonKoLine ||
+        ops.lossHaltReasonKo ||
+        "운영 가드에 의해 신규 실주문이 차단되었습니다",
+    };
+  } else if (finalPossible) {
+    model = {
+      ...base,
+      actualOrderState: "가능",
+      overallState: "주문 가능",
+      realOrderYesNo: "YES",
+      blockReasonLine: "엔진·운영 가드를 모두 통과한 상태입니다",
+    };
+  } else {
+    model = { ...base };
+  }
+
+  const maxOd = cfg.liveOpsMaxOrdersPerDay;
+  const maxStr = maxOd <= 0 ? "무제한" : String(maxOd);
+  const rem =
+    maxOd <= 0
+      ? "—"
+      : String(Math.max(0, maxOd - (ops.ordersTodayCount ?? 0)));
+
+  const ext: LiveOpsExtendedBanner = {
+    killSwitchLine: ops.killSwitchActive
+      ? `활성 (${ops.killSwitchActivatedAt ?? "—"} · ${ops.killSwitchActivatedBy ?? ""})`
+      : "해제됨",
+    ordersToday: String(ops.ordersTodayCount ?? 0),
+    ordersMax: maxStr,
+    ordersRemaining: rem,
+    dailyPnlLine: fmtKrw(ops.dailyRealizedPnlKrw ?? 0),
+    lossLimitLine: fmtKrw(cfg.liveMaxDailyLossKrw),
+    opsBlockedLine:
+      ops.killSwitchActive || !opG.ok
+        ? "차단"
+        : base.actualOrderState === "차단"
+          ? "차단(엔진·장 등)"
+          : "아니오",
+    reentryLine: reentryDescribe(cfg, ops, sym),
+    lastAttempt: ops.lastOrderAttemptAt ?? "—",
+    lastSuccess: ops.lastOrderSuccessAt ?? "—",
+    lastFailure: ops.lastOrderFailureAt ?? "—",
+  };
+
+  return { model, ext, envWarnings };
+}
+
+/** @deprecated 호환용 — 스냅샷만 */
+export function computeLiveOpsBanner(data: Record<string, unknown> | null): LiveOpsBannerModel {
+  return computeSnapshotBannerModel(data);
 }

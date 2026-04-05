@@ -55,6 +55,14 @@ import {
     findTimedOutOrders,
     markCancelRequested,
 } from "./live-order-tracker.js";
+import { evaluateLiveOperationalOrderGate } from "./live-ops-guard.js";
+import {
+    applyLossHaltIfNeeded,
+    recordOrderAttempt,
+    recordOrderBrokerResult,
+    recordSymbolFlat,
+    syncDailyRealizedPnlKrw,
+} from "./live-ops-state.js";
 
 // -----------------------------------------------------------------
 // 설정 상수 (초기 10만원 기준; 추후 .env 로 이관 가능)
@@ -175,6 +183,41 @@ async function sendSellOrder(
     const ok = tr.ok && isKiwoomTrBusinessOk(tr.json);
     logger.info("live.loop.order.sell.result", { symbol, ok, httpStatus: tr.httpStatus, broker: tr.json });
     return { ok, message: ok ? "ok" : tr.message };
+}
+
+async function sendBuyOrderGuarded(
+    config: AppConfig,
+    symbol: string,
+    qty: number,
+    price: number,
+    logger: Logger
+): Promise<{ ok: boolean; orderId?: string; message: string }> {
+    const op = evaluateLiveOperationalOrderGate(config, { symbol, side: "BUY" });
+    if (!op.ok) {
+        logger.warn("live.loop.ops.blocked", {
+            msg: op.reasonKoLine,
+            reasons: op.reasons,
+            symbol,
+        });
+        return { ok: false, message: op.reasonKoLine };
+    }
+    recordOrderAttempt();
+    const r = await sendBuyOrder(config, symbol, qty, price, logger);
+    recordOrderBrokerResult({ ok: r.ok, accepted: r.ok });
+    return r;
+}
+
+async function sendSellOrderGuarded(
+    config: AppConfig,
+    symbol: string,
+    qty: number,
+    price: number,
+    logger: Logger
+): Promise<{ ok: boolean; message: string }> {
+    recordOrderAttempt();
+    const r = await sendSellOrder(config, symbol, qty, price, logger);
+    recordOrderBrokerResult({ ok: r.ok, accepted: r.ok });
+    return r;
 }
 
 // -----------------------------------------------------------------
@@ -354,7 +397,7 @@ async function runLiveOneTick(
             highestPrice: pos.highestPrice,
         });
 
-        const sellResult = await sendSellOrder(config, pos.symbol, pos.qty, q.lastPrice, logger);
+        const sellResult = await sendSellOrderGuarded(config, pos.symbol, pos.qty, q.lastPrice, logger);
 
         await appendOrderLog(ordersPath, {
             ts: now.toISOString(),
@@ -390,6 +433,10 @@ async function runLiveOneTick(
                     pnlPct: Number(cost.finalNetPnlPct.toFixed(4)),
                     dailyRealizedPnlKrw: _dailyRealizedPnlKrw,
                 });
+
+                recordSymbolFlat(pos.symbol, now.toISOString());
+                syncDailyRealizedPnlKrw(_dailyRealizedPnlKrw);
+                applyLossHaltIfNeeded(config.liveMaxDailyLossKrw);
 
                 const tradesPath = getTradesJsonlPath(config.tradesDir, now, "live");
                 await appendTradeJsonlRecord(tradesPath, {
@@ -539,7 +586,7 @@ async function runLiveOneTick(
             if (!q) continue;
 
             const qty = Math.max(1, Math.floor(LIVE_POSITION_SIZE_KRW / q.lastPrice));
-            const buyResult = await sendBuyOrder(config, pick.symbol, qty, q.lastPrice, logger);
+            const buyResult = await sendBuyOrderGuarded(config, pick.symbol, qty, q.lastPrice, logger);
 
             // 주문 전송 즉시 cooldown 등록 + order tracker 등록
             recordOrderTimestamp(pick.symbol);
@@ -584,6 +631,9 @@ async function runLiveOneTick(
             }
         }
     }
+
+    syncDailyRealizedPnlKrw(_dailyRealizedPnlKrw);
+    applyLossHaltIfNeeded(config.liveMaxDailyLossKrw);
 
     // ---
     // [4] 대시보드 스냅샷 갱신

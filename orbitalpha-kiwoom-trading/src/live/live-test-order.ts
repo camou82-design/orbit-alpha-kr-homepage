@@ -15,6 +15,8 @@ import {
 } from "./live-test-order-state.js";
 import { mergeMonitorSnapshot } from "../infra/monitor-snapshot.js";
 import { evaluateScore } from "../core/scoring.js";
+import { evaluateLiveOperationalOrderGate } from "./live-ops-guard.js";
+import { recordOrderAttempt, recordOrderBrokerResult } from "./live-ops-state.js";
 
 /** Must match `LIVE_TEST_ORDER_CONFIRM` env exactly to allow a real test buy. */
 export const LIVE_TEST_ORDER_CONFIRM_VALUE = "EXECUTE_TEST_BUY_ONCE";
@@ -118,6 +120,25 @@ export async function submitLiveTestBuyOrderOnce(
 ): Promise<void> {
   const { logger, config, session, accountResult, quoteResult } = ctx;
   const symbol = config.liveTestAllowedSymbol.trim();
+
+  const opGate = evaluateLiveOperationalOrderGate(config, {
+    symbol,
+    side: "BUY",
+  });
+  if (!opGate.ok) {
+    logBlocked(logger, opGate.reasons.map((r) => `ops_${r}`));
+    mergeMonitorSnapshot({
+      liveTestOrderEligible: false,
+      liveTestOrderBlockReasons: opGate.reasons.map((r) => `ops_${r}`),
+      lastLiveTestOrderResult: {
+        phase: "blocked",
+        reasons: opGate.reasons,
+        reasonKo: opGate.reasonKoLine,
+      },
+    });
+    return;
+  }
+
   const guard = evaluateLiveTestOrderGuards({
     config,
     session,
@@ -195,6 +216,8 @@ export async function submitLiveTestBuyOrderOnce(
     strategy_reason: strategyEval.reason,
   });
 
+  recordOrderAttempt();
+
   const tr: KiwoomTrPostResult = await kiwoomTrPost(
     config,
     token.accessToken,
@@ -212,6 +235,8 @@ export async function submitLiveTestBuyOrderOnce(
 
   const businessOk = isKiwoomTrBusinessOk(tr.json);
   const accepted = tr.ok && businessOk;
+
+  recordOrderBrokerResult({ ok: tr.ok, accepted });
 
   logger.info("live.order.final", {
     msg: accepted ? "live order final accepted" : "live order final rejected",

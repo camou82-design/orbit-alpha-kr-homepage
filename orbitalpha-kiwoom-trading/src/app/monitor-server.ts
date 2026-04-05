@@ -11,15 +11,23 @@ import type {
 } from "../infra/monitor-snapshot.js";
 import { getMonitorStatusPathForServer } from "../infra/monitor-snapshot.js";
 import { hrefToPaperDashboard } from "../infra/cross-nav-links.js";
-import { computeLiveOpsBanner } from "../infra/live-ops-banner.js";
+import { buildLiveOpsControlRows } from "../infra/live-ops-banner.js";
+import { loadConfig, type AppConfig } from "../infra/config.js";
 import {
   dashboardDefaultReturnPathLive,
   dashboardHttpAuthEnabled,
   dashboardSessionSecretOk,
+  dashboardSessionUsername,
   requireDashboardSession,
   sendNoStoreHeaders,
   tryDashboardAuthRoutes,
 } from "../infra/dashboard-http-auth.js";
+import type { LiveOpsStateFile } from "../live/live-ops-state.js";
+import {
+  getLiveOpsStatePath,
+  readLiveOpsState,
+  setKillSwitchActive,
+} from "../live/live-ops-state.js";
 
 const HOST = process.env.MONITOR_HOST?.trim() || "127.0.0.1";
 const PORT = Number(process.env.MONITOR_PORT ?? 3001);
@@ -101,10 +109,17 @@ function defaultAccountSummary(): MonitorAccountSummary {
   };
 }
 
+interface MonitorRenderCtx {
+  hrefPaper: string;
+  config: AppConfig;
+  opsState: LiveOpsStateFile;
+  sessionUser: string | null;
+}
+
 function renderPage(
   rawJson: string | null,
   data: Record<string, unknown> | null,
-  hrefPaper: string
+  ctx: MonitorRenderCtx
 ): string {
   const now = new Date().toISOString();
   const lastLogAt = typeof data?.lastLogAt === "string" ? data.lastLogAt : "—";
@@ -167,7 +182,23 @@ function renderPage(
       ? `<strong>경고</strong>: 테스트 주문 가드 통과 — 이 실행에서 <strong>지정가 신규매수 1주</strong>가 전송될 수 있습니다. 전략 루프·자동 실주문은 비활성입니다. UI 주문 버튼 없음.`
       : "";
 
-  const ops = computeLiveOpsBanner(data);
+  const { model: ops, ext: ox, envWarnings } = buildLiveOpsControlRows(
+    data,
+    ctx.opsState,
+    ctx.config
+  );
+  const isAdmin =
+    Boolean(ctx.sessionUser?.trim()) &&
+    ctx.sessionUser!.trim() === ctx.config.adminUsername.trim();
+
+  const envWarnHtml =
+    envWarnings.length > 0
+      ? `<div class="env-warn">${envWarnings.map((w) => `<div>${esc(w)}</div>`).join("")}</div>`
+      : "";
+
+  const killBanner = ctx.opsState.killSwitchActive
+    ? `<div class="kill-active-banner">긴급 중단 활성화 — 신규 실주문(매수)이 즉시 차단된 상태입니다. 해제는 관리자만 가능합니다.</div>`
+    : "";
 
   const staleNote = snapshotStale
     ? `<span class="muted" style="display:block;margin-top:0.25rem;color:#856404"><strong>스냅샷 주의:</strong> 이 JSON이 구버전이거나 엔진이 이 경로에서 쓰지 않은 파일일 수 있습니다. 엔진을 <strong>orbitalpha-kiwoom-trading</strong> 루트에서 다시 실행하거나 <code>/api/status</code>의 <code>configLoaded.monitorStatusFilePath</code>를 확인하세요.</span>`
@@ -358,6 +389,21 @@ function renderPage(
     }
     .err { color: #b00020; font-size: 12px; margin: 0.25rem 0; }
     .note { font-size: 11px; color: #555; margin-top: 0.35rem; line-height: 1.4; }
+    .env-warn {
+      background: #fff8e6;
+      border-bottom: 2px solid #f9a825;
+      padding: 0.45rem 1rem;
+      font-size: 12px;
+      color: #6d4c00;
+    }
+    .kill-active-banner {
+      background: #8b0000;
+      color: #fff;
+      padding: 0.45rem 1rem;
+      font-size: 12px;
+      font-weight: 700;
+      text-align: center;
+    }
   </style>
 </head>
 <body>
@@ -365,13 +411,16 @@ function renderPage(
     <div class="topbar-row">
       <div><strong>${esc(APP_TITLE)}</strong> · <span class="sub">실주문 계열 운영 모니터 (read-only)</span></div>
       <div class="btn-row">
-        <button type="button" class="topbtn kill-soon" disabled title="다음 단계에서 긴급 차단 로직 연결 예정">긴급 중단</button>
-        <a class="toplink" href="${esc(hrefPaper)}">PAPER 급등주 모의매매 열기</a>
+        <button type="button" class="topbtn" id="btnKillOn" ${ctx.opsState.killSwitchActive ? "disabled" : ""}>긴급 중단</button>
+        ${isAdmin ? `<button type="button" class="topbtn" id="btnKillOff" ${!ctx.opsState.killSwitchActive ? "disabled" : ""}>긴급 중단 해제</button>` : ""}
+        <a class="toplink" href="${esc(ctx.hrefPaper)}">PAPER 급등주 모의매매 열기</a>
         <button type="button" class="topbtn" id="btnLogout">로그아웃</button>
       </div>
     </div>
-    <div class="sub">자동 갱신 약 ${String(REFRESH_SEC)}초 · 스냅샷: ${esc(lastLogAt)}</div>
+    <div class="sub">자동 갱신 약 ${String(REFRESH_SEC)}초 · 스냅샷: ${esc(lastLogAt)} · 운영상태 파일: <code>${esc(getLiveOpsStatePath())}</code></div>
   </div>
+  ${envWarnHtml}
+  ${killBanner}
   <div class="ops-banner">
     <h2>운영 상태 요약</h2>
     <div class="ops-grid">
@@ -382,7 +431,17 @@ function renderPage(
       <div class="ops-line"><span class="k">계좌 조회:</span> <span class="v">${esc(ops.accountLookup)}</span></div>
       <div class="ops-line"><span class="k">시세 수신:</span> <span class="v">${esc(ops.quoteReceive)}</span></div>
       <div class="ops-line"><span class="k">LIVE 설정:</span> <span class="v">${esc(ops.liveConfigOnOff)}</span> <span class="k" style="margin-left:0.5rem">(환경 LIVE_TRADING 게이트)</span></div>
-      <div class="ops-line"><span class="k">실제 주문 상태:</span> <span class="v ${stCls(ops.actualOrderState)}">${esc(ops.actualOrderState)}</span> <span class="k" style="margin-left:0.5rem">(가드·장·연동 결과)</span></div>
+      <div class="ops-line"><span class="k">실제 주문 상태:</span> <span class="v ${stCls(ops.actualOrderState)}">${esc(ops.actualOrderState)}</span> <span class="k" style="margin-left:0.5rem">(가드·장·연동·운영)</span></div>
+      <div class="ops-line"><span class="k">긴급 중단:</span> <span class="v ${ctx.opsState.killSwitchActive ? "state-bad" : "state-ok"}">${esc(ox.killSwitchLine)}</span></div>
+      <div class="ops-line"><span class="k">오늘 주문 수 / 상한:</span> <span class="v">${esc(ox.ordersToday)} / ${esc(ox.ordersMax)}</span></div>
+      <div class="ops-line"><span class="k">남은 허용 주문:</span> <span class="v">${esc(ox.ordersRemaining)}</span></div>
+      <div class="ops-line"><span class="k">오늘 누적 실현손익:</span> <span class="v">${esc(ox.dailyPnlLine)}</span></div>
+      <div class="ops-line"><span class="k">손실 제한 기준:</span> <span class="v">${esc(ox.lossLimitLine)}</span></div>
+      <div class="ops-line"><span class="k">운영 차단(통제):</span> <span class="v">${esc(ox.opsBlockedLine)}</span></div>
+      <div class="ops-line" style="grid-column: 1 / -1"><span class="k">재진입 제한:</span> <span class="v">${esc(ox.reentryLine)}</span></div>
+      <div class="ops-line"><span class="k">마지막 주문 시도:</span> <span class="v">${esc(ox.lastAttempt)}</span></div>
+      <div class="ops-line"><span class="k">마지막 주문 성공:</span> <span class="v">${esc(ox.lastSuccess)}</span></div>
+      <div class="ops-line"><span class="k">마지막 주문 실패:</span> <span class="v">${esc(ox.lastFailure)}</span></div>
     </div>
   </div>
   ${warnStrip ? `<div class="warn-strip">${warnStrip}</div>` : ""}
@@ -523,6 +582,34 @@ function renderPage(
   </div>
   <script>
 (function(){
+  var dashAuth = ${dashboardHttpAuthEnabled() ? "true" : "false"};
+  function postOps(act) {
+    if (!dashAuth) {
+      alert("긴급 중단을 쓰려면 KIWOOM_DASHBOARD_HTTP_AUTH=true 와 로그인이 필요합니다.");
+      return;
+    }
+    if (act === "kill_on" && !confirm("긴급 중단을 활성화하면 신규 매수 실주문이 즉시 차단됩니다. 진행할까요?")) return;
+    if (act === "kill_off" && !confirm("긴급 중단을 해제합니다. (관리자만 가능) 진행할까요?")) return;
+    fetch("ops/control", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify({ action: act === "kill_on" ? "kill_on" : "kill_off" })
+    })
+      .then(function(r) { return r.json().then(function(j) { return { r: r, j: j }; }); })
+      .then(function(x) {
+        if (!x.j || !x.j.ok) {
+          alert(x.j && x.j.error === "admin_only" ? "관리자만 해제할 수 있습니다." : "요청이 거절되었습니다.");
+          return;
+        }
+        location.reload();
+      })
+      .catch(function() { alert("네트워크 오류"); });
+  }
+  var kOn = document.getElementById("btnKillOn");
+  if (kOn) kOn.addEventListener("click", function() { postOps("kill_on"); });
+  var kOff = document.getElementById("btnKillOff");
+  if (kOff) kOff.addEventListener("click", function() { postOps("kill_off"); });
   var el = document.getElementById("btnLogout");
   if (!el) return;
   el.addEventListener("click", function(){
@@ -552,6 +639,22 @@ function queryString(url: string): string {
   return q < 0 ? "" : noHash.slice(q + 1);
 }
 
+async function readJsonBody(
+  req: import("node:http").IncomingMessage
+): Promise<Record<string, unknown>> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of req) {
+    chunks.push(chunk as Buffer);
+  }
+  const raw = Buffer.concat(chunks).toString("utf8").trim();
+  if (!raw) return {};
+  try {
+    return JSON.parse(raw) as Record<string, unknown>;
+  } catch {
+    return {};
+  }
+}
+
 async function handleMonitorRequest(
   req: import("node:http").IncomingMessage,
   res: import("node:http").ServerResponse
@@ -562,6 +665,47 @@ async function handleMonitorRequest(
 
   if (await tryDashboardAuthRoutes(req, res, p, qs, dashboardDefaultReturnPathLive()))
     return;
+
+  if (p === "/ops/control" && req.method === "POST") {
+    if (!dashboardHttpAuthEnabled()) {
+      sendNoStoreHeaders(res);
+      res.writeHead(403, { "Content-Type": "application/json; charset=utf-8" });
+      res.end(JSON.stringify({ ok: false, error: "dashboard_auth_required" }));
+      return;
+    }
+    if (!requireDashboardSession(req, res, dashboardDefaultReturnPathLive())) return;
+    const user = dashboardSessionUsername(req);
+    if (!user) {
+      sendNoStoreHeaders(res);
+      res.writeHead(403, { "Content-Type": "application/json; charset=utf-8" });
+      res.end(JSON.stringify({ ok: false, error: "no_session" }));
+      return;
+    }
+    const body = await readJsonBody(req);
+    const action = String(body.action ?? "");
+    const cfg = loadConfig();
+    sendNoStoreHeaders(res);
+    if (action === "kill_on") {
+      setKillSwitchActive(true, user);
+      res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
+      res.end(JSON.stringify({ ok: true }));
+      return;
+    }
+    if (action === "kill_off") {
+      if (user.trim() !== cfg.adminUsername.trim()) {
+        res.writeHead(403, { "Content-Type": "application/json; charset=utf-8" });
+        res.end(JSON.stringify({ ok: false, error: "admin_only" }));
+        return;
+      }
+      setKillSwitchActive(false, user);
+      res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
+      res.end(JSON.stringify({ ok: true }));
+      return;
+    }
+    res.writeHead(400, { "Content-Type": "application/json; charset=utf-8" });
+    res.end(JSON.stringify({ ok: false, error: "bad_action" }));
+    return;
+  }
 
   if (p === "/" || p === "") {
     if (req.method !== "GET") {
@@ -583,8 +727,18 @@ async function handleMonitorRequest(
       }
     }
     if (dashboardHttpAuthEnabled()) sendNoStoreHeaders(res);
+    const cfg = loadConfig();
+    const opsSt = readLiveOpsState();
+    const sessionUser = dashboardSessionUsername(req);
     res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-    res.end(renderPage(raw, data, hrefToPaperDashboard(req)));
+    res.end(
+      renderPage(raw, data, {
+        hrefPaper: hrefToPaperDashboard(req),
+        config: cfg,
+        opsState: opsSt,
+        sessionUser,
+      })
+    );
     return;
   }
 

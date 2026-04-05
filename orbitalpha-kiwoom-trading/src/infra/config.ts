@@ -113,6 +113,10 @@ export interface AppConfig {
   liveTestAllowedSymbol: string;
   /** Must equal EXECUTE_TEST_BUY_ONCE (see .env.example) to allow one test buy. */
   liveTestOrderConfirm: string;
+  /** 운영 실주문 일일 횟수 상한(브로커 POST 기준). 0 = 무제한. */
+  liveOpsMaxOrdersPerDay: number;
+  /** 청산 후 동일 종목 매수 재진입 금지 시간(분). 0 = 비활성. */
+  liveOpsReentryCooldownMinutes: number;
 }
 
 function bool(v: string | undefined, defaultValue: boolean): boolean {
@@ -336,5 +340,10 @@ export function loadConfig(): AppConfig {
     liveTestMaxOrdersPerDay: Math.floor(num(process.env.LIVE_TEST_MAX_ORDERS_PER_DAY, 0)),
     liveTestAllowedSymbol: (process.env.LIVE_TEST_ALLOWED_SYMBOL ?? "").trim(),
     liveTestOrderConfirm: (process.env.LIVE_TEST_ORDER_CONFIRM ?? "").trim(),
+    liveOpsMaxOrdersPerDay: Math.max(0, Math.floor(num(process.env.LIVE_OPS_MAX_ORDERS_PER_DAY, 50))),
+    liveOpsReentryCooldownMinutes: Math.max(
+      0,
+      Math.floor(num(process.env.LIVE_OPS_REENTRY_COOLDOWN_MINUTES, 45))
+    ),
   };
 }
