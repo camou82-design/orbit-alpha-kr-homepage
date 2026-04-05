@@ -6,6 +6,7 @@
   "type": "module",
   "scripts": {
     "build": "tsc",
+    "selfcheck:funding": "tsx src/live/live-order-funding-selfcheck.ts",
     "start": "tsx src/app/main.ts",
     "dev": "tsx src/app/main.ts",
     "live:test": "cross-env AUTH_ENABLED=false AUTH_BYPASS_ROLE=trader APP_ENTRY_MODE=live LIVE_CONFIRMATION_REQUIRED=false tsx src/app/main.ts",

@@ -34,6 +34,14 @@ export interface LiveOpsExtendedBanner {
   lastAttempt: string;
   lastSuccess: string;
   lastFailure: string;
+  /** 미수불가·현금 기준 주문 가드 (/live 스냅샷 liveOrderFunding) */
+  fundingCashLine: string;
+  fundingD2Line: string;
+  fundingNoMarginCapLine: string;
+  fundingCapSourceLine: string;
+  fundingRequiredLine: string;
+  fundingGateYesNo: string;
+  fundingReasonLine: string;
 }
 
 const REASON_KO: Record<string, string> = {
@@ -61,6 +69,7 @@ const REASON_KO: Record<string, string> = {
   account_fetch_not_ok: "계좌 조회 결과가 유효하지 않아 테스트 주문이 제한됩니다",
   quote_missing_or_invalid_price: "시세가 없거나 가격이 유효하지 않습니다",
   live_test_daily_order_limit_reached: "오늘 테스트 주문 허용 횟수를 모두 사용했습니다",
+  live_order_funding_blocked: "미수불가·현금 기준 주문 가능 금액 가드에 걸렸습니다",
 };
 
 function mapReasonToLine(code: string): string {
@@ -193,6 +202,26 @@ export function computeSnapshotBannerModel(
       "테스트 실주문 가드 미통과로 주문이 제한됩니다";
   }
 
+  const fund = data?.liveOrderFunding as
+    | { fundingGateOk?: boolean; reasonKo?: string }
+    | undefined;
+  if (
+    fund != null &&
+    fund.fundingGateOk === false &&
+    sessionOk &&
+    accountRealFetchOk === true &&
+    quoteRealFetchOk === true &&
+    kiwoomConfigured &&
+    !startupError &&
+    !livePathError
+  ) {
+    actualOrderState = "차단";
+    blockReasonLine =
+      typeof fund.reasonKo === "string" && fund.reasonKo.trim()
+        ? fund.reasonKo.trim()
+        : "주문 가능 금액 확인 실패로 실주문 차단";
+  }
+
   const overallState: LiveOpsBannerModel["overallState"] =
     actualOrderState === "가능"
       ? "주문 가능"
@@ -292,6 +321,18 @@ export function buildLiveOpsControlRows(
       ? "—"
       : String(Math.max(0, maxOd - (ops.ordersTodayCount ?? 0)));
 
+  const lf = data?.liveOrderFunding as
+    | {
+        cashKrw?: number;
+        cashD2Krw?: number;
+        noMarginOrderCapKrw?: number;
+        capSource?: string;
+        requiredKrw?: number;
+        fundingGateOk?: boolean;
+        reasonKo?: string;
+      }
+    | undefined;
+
   const ext: LiveOpsExtendedBanner = {
     killSwitchLine: ops.killSwitchActive
       ? `활성 (${ops.killSwitchActivatedAt ?? "—"} · ${ops.killSwitchActivatedBy ?? ""})`
@@ -311,6 +352,23 @@ export function buildLiveOpsControlRows(
     lastAttempt: ops.lastOrderAttemptAt ?? "—",
     lastSuccess: ops.lastOrderSuccessAt ?? "—",
     lastFailure: ops.lastOrderFailureAt ?? "—",
+    fundingCashLine: lf ? fmtKrw(Number(lf.cashKrw) || 0) : "—",
+    fundingD2Line: lf ? fmtKrw(Number(lf.cashD2Krw) || 0) : "—",
+    fundingNoMarginCapLine: lf ? fmtKrw(Number(lf.noMarginOrderCapKrw) || 0) : "—",
+    fundingCapSourceLine: lf && typeof lf.capSource === "string" ? lf.capSource : "—",
+    fundingRequiredLine: lf ? fmtKrw(Number(lf.requiredKrw) || 0) : "—",
+    fundingGateYesNo:
+      lf == null
+        ? "—"
+        : lf.fundingGateOk === true
+          ? "YES"
+          : lf.fundingGateOk === false
+            ? "NO"
+            : "—",
+    fundingReasonLine:
+      lf && typeof lf.reasonKo === "string" && lf.reasonKo.trim()
+        ? lf.reasonKo.trim()
+        : "—",
   };
 
   return { model, ext, envWarnings };

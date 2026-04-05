@@ -19,7 +19,11 @@ import type { Logger } from "../infra/logger.js";
 import { clockNow } from "../infra/clock.js";
 
 import { fetchKiwoomAccessToken, isKiwoomTrBusinessOk, kiwoomTrPost } from "../kiwoom/kiwoom-rest.js";
-import { fetchQuote, fetchAccountInfo } from "./kiwoom-client.js";
+import { fetchQuote, fetchAccountInfo, type KiwoomAccountInfoResult } from "./kiwoom-client.js";
+import {
+    evaluateCashOnlyBuyFunding,
+    snapshotToPlain,
+} from "./live-order-funding.js";
 import { getEffectiveMarketSessionPhase } from "../kiwoom/market-hours.js";
 import { evaluateScore } from "../core/scoring.js";
 import { selectPumpEntryCandidates } from "../core/pump-selector.js";
@@ -190,7 +194,8 @@ async function sendBuyOrderGuarded(
     symbol: string,
     qty: number,
     price: number,
-    logger: Logger
+    logger: Logger,
+    accountResult: KiwoomAccountInfoResult
 ): Promise<{ ok: boolean; orderId?: string; message: string }> {
     const op = evaluateLiveOperationalOrderGate(config, { symbol, side: "BUY" });
     if (!op.ok) {
@@ -200,6 +205,22 @@ async function sendBuyOrderGuarded(
             symbol,
         });
         return { ok: false, message: op.reasonKoLine };
+    }
+    const requiredKrw = Math.round(price * qty);
+    const fund = evaluateCashOnlyBuyFunding({
+        accountFetchOk: accountResult.ok,
+        accountSummary: accountResult.accountSummary,
+        requiredKrw,
+        accountCreditRisk: accountResult.accountSummary?.accountCreditRisk,
+    });
+    if (!fund.fundingGateOk) {
+        logger.warn("live.loop.funding.blocked", {
+            msg: fund.reasonKo,
+            symbol,
+            requiredKrw,
+            cap: fund.noMarginOrderCapKrw,
+        });
+        return { ok: false, message: fund.reasonKo };
     }
     recordOrderAttempt();
     const r = await sendBuyOrder(config, symbol, qty, price, logger);
@@ -273,6 +294,16 @@ async function runLiveOneTick(
             ...forceExitGate.context,
         });
     }
+
+    const tickAccountResult = await fetchAccountInfo(logger, config);
+    const tickAccountQueriedAt = new Date().toISOString();
+
+    let fundingForMonitor = evaluateCashOnlyBuyFunding({
+        accountFetchOk: tickAccountResult.ok,
+        accountSummary: tickAccountResult.accountSummary,
+        requiredKrw: 0,
+        accountCreditRisk: tickAccountResult.accountSummary?.accountCreditRisk,
+    });
 
     // ---
     // [0-b] 미체결 타임아웃 처리 (취소 API 미구현 — EXPIRED 전환으로 재진입 차단 해제)
@@ -548,6 +579,25 @@ async function runLiveOneTick(
             paperTakeProfitPct: LIVE_TAKE_PROFIT_PCT,
         });
 
+        if (sel.picks.length > 0) {
+            let maxRequiredKrw = 0;
+            for (const pick of sel.picks) {
+                const qx = quoteMap.get(pick.symbol);
+                if (!qx) continue;
+                const qQty = Math.max(1, Math.floor(LIVE_POSITION_SIZE_KRW / qx.lastPrice));
+                maxRequiredKrw = Math.max(
+                    maxRequiredKrw,
+                    Math.round(qx.lastPrice * qQty)
+                );
+            }
+            fundingForMonitor = evaluateCashOnlyBuyFunding({
+                accountFetchOk: tickAccountResult.ok,
+                accountSummary: tickAccountResult.accountSummary,
+                requiredKrw: maxRequiredKrw,
+                accountCreditRisk: tickAccountResult.accountSummary?.accountCreditRisk,
+            });
+        }
+
         for (const pick of sel.picks) {
             if (liveOpenCount() >= LIVE_MAX_OPEN_POSITIONS) break;
             if (hasLivePosition(pick.symbol)) continue;
@@ -586,7 +636,14 @@ async function runLiveOneTick(
             if (!q) continue;
 
             const qty = Math.max(1, Math.floor(LIVE_POSITION_SIZE_KRW / q.lastPrice));
-            const buyResult = await sendBuyOrderGuarded(config, pick.symbol, qty, q.lastPrice, logger);
+            const buyResult = await sendBuyOrderGuarded(
+                config,
+                pick.symbol,
+                qty,
+                q.lastPrice,
+                logger,
+                tickAccountResult
+            );
 
             // 주문 전송 즉시 cooldown 등록 + order tracker 등록
             recordOrderTimestamp(pick.symbol);
@@ -639,6 +696,11 @@ async function runLiveOneTick(
     // [4] 대시보드 스냅샷 갱신
     // ---
     mergeMonitorSnapshot({
+        accountRealFetchOk: tickAccountResult.ok,
+        accountSummary: tickAccountResult.accountSummary,
+        holdings: tickAccountResult.holdings ?? [],
+        accountQueriedAt: tickAccountQueriedAt,
+        liveOrderFunding: snapshotToPlain(fundingForMonitor),
         liveLoop: {
             tick: tickIndex,
             ts: now.toISOString(),

@@ -105,6 +105,9 @@ function defaultAccountSummary(): MonitorAccountSummary {
     paymentAvailableKrw: 0,
     orderAvailableKrw: 0,
     totReBuyOrderAllowableKrw: 0,
+    noMarginOrderCapKrw: 0,
+    noMarginOrderCapSource: "none",
+    accountCreditRisk: false,
     note: "accountSummary 없음 — `npm run live:test` 등으로 스냅샷을 갱신하세요.",
   };
 }
@@ -442,6 +445,14 @@ function renderPage(
       <div class="ops-line"><span class="k">마지막 주문 시도:</span> <span class="v">${esc(ox.lastAttempt)}</span></div>
       <div class="ops-line"><span class="k">마지막 주문 성공:</span> <span class="v">${esc(ox.lastSuccess)}</span></div>
       <div class="ops-line"><span class="k">마지막 주문 실패:</span> <span class="v">${esc(ox.lastFailure)}</span></div>
+      <div class="ops-line" style="grid-column: 1 / -1; margin-top:0.35rem; padding-top:0.35rem; border-top:1px solid #dee2e6"><span class="k" style="font-weight:700">주문 자금 가드</span> <span class="k">(미수불가·현금)</span></div>
+      <div class="ops-line"><span class="k">현금 예수금:</span> <span class="v">${esc(ox.fundingCashLine)}</span></div>
+      <div class="ops-line"><span class="k">D+2 추정예수금:</span> <span class="v">${esc(ox.fundingD2Line)}</span></div>
+      <div class="ops-line"><span class="k">미수불가 100% 주문가능:</span> <span class="v">${esc(ox.fundingNoMarginCapLine)}</span></div>
+      <div class="ops-line"><span class="k">상한 출처 키:</span> <span class="v" style="font-weight:600;font-family:Consolas,monospace">${esc(ox.fundingCapSourceLine)}</span></div>
+      <div class="ops-line"><span class="k">기준 주문 필요 금액:</span> <span class="v">${esc(ox.fundingRequiredLine)}</span></div>
+      <div class="ops-line"><span class="k">미수불가 가드 통과:</span> <span class="v ${stCls(ox.fundingGateYesNo)}">${esc(ox.fundingGateYesNo)}</span></div>
+      <div class="ops-line" style="grid-column: 1 / -1"><span class="k">가드 사유:</span> <span class="v">${esc(ox.fundingReasonLine)}</span></div>
     </div>
   </div>
   ${warnStrip ? `<div class="warn-strip">${warnStrip}</div>` : ""}
@@ -502,6 +513,10 @@ function renderPage(
       <div class="sum-cell">
         <div class="label">D+2 예수금</div>
         <div class="val">${fmtKrw(sum.cashD2Krw)}</div>
+      </div>
+      <div class="sum-cell">
+        <div class="label">미수불가 100% 주문가능 <span class="muted" style="font-size:10px">(실주문 한도)</span></div>
+        <div class="val">${fmtKrw(sum.noMarginOrderCapKrw)}</div>
       </div>
       <div class="sum-cell">
         <div class="label">주문가능금 <span class="muted" style="font-size:10px">(ord_alowa)</span></div>

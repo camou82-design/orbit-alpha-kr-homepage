@@ -24,6 +24,10 @@ import { BasicUniverseFilter } from "../kiwoom/basic-universe-filter.js";
 import { MockMarketDataAdapter } from "../kiwoom/mock-market-data.js";
 import { preparePaperEngine, startPaperLoop } from "../paper/paper-engine.js";
 import { startLiveLoop } from "../live/live-loop.js";
+import {
+  evaluateCashOnlyBuyFunding,
+  snapshotToPlain,
+} from "../live/live-order-funding.js";
 
 export function resolveInitialEntryMode(
   config: AppConfig
@@ -84,6 +88,9 @@ function buildLiveMonitorAccountSnapshot(
         paymentAvailableKrw: 0,
         orderAvailableKrw: 0,
         totReBuyOrderAllowableKrw: 0,
+        noMarginOrderCapKrw: 0,
+        noMarginOrderCapSource: "none",
+        accountCreditRisk: false,
         note: !configured
           ? "키움 연결 정보 미설정 — 합계·보유 없음"
           : "실계좌 조회 실패 또는 응답 파싱 불가 — 로그·HTS와 대조",
@@ -253,12 +260,28 @@ export async function runLiveMode(logger: Logger, config: AppConfig): Promise<vo
     forcedSessionPhase,
   });
 
+  const lp = quoteResult.lastPrice;
+  const reqKrw =
+    lp !== null && lp !== undefined && Number.isFinite(lp) ? Math.round(lp) : 0;
+  const fundPreview = evaluateCashOnlyBuyFunding({
+    accountFetchOk: accountResult.ok,
+    accountSummary: accountResult.accountSummary,
+    requiredKrw: reqKrw,
+    accountCreditRisk: accountResult.accountSummary?.accountCreditRisk,
+  });
+  const eligibleWithFunding =
+    testGuardPreview.ok && fundPreview.fundingGateOk;
+  const blockWithFunding = fundPreview.fundingGateOk
+    ? testGuardPreview.reasons
+    : [...testGuardPreview.reasons, "live_order_funding_blocked"];
+
   mergeMonitorSnapshot({
     accountRealFetchOk: accountResult.ok,
     quoteRealFetchOk: quoteResult.ok,
-    liveTestOrderEligible: testGuardPreview.ok,
-    liveTestOrderBlockReasons: testGuardPreview.reasons,
+    liveTestOrderEligible: eligibleWithFunding,
+    liveTestOrderBlockReasons: blockWithFunding,
     liveTestOrdersToday: getLiveTestOrdersToday(),
+    liveOrderFunding: snapshotToPlain(fundPreview),
     ...buildLiveMonitorAccountSnapshot(
       connectResult,
       accountQueriedAt,

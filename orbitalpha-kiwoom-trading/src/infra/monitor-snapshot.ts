@@ -21,6 +21,15 @@ export interface MonitorAccountSummary {
   orderAvailableKrw: number;
   /** kt00005 `tot_re_buy_alowa` — 재매수 관련 주문가용 합계 등으로 추정 가능; 의미는 문서·HTS 대조 권장. */
   totReBuyOrderAllowableKrw: number;
+  /**
+   * 실주문 가드에 쓰는 상한: `KIWOOM_KT00005_NO_MARGIN_CAP_KEYS` 등으로 찾은 미수불가 100% 주문가능금액,
+   * 없으면 `entr` 폴백. D+2 총액(entr_d2)은 이 값에 넣지 않음.
+   */
+  noMarginOrderCapKrw: number;
+  /** 상한 출처 필드명 또는 entr_fallback / none */
+  noMarginOrderCapSource: string;
+  /** 응답 상단 신용·대출 플래그 휴리스틱 */
+  accountCreditRisk: boolean;
   note?: string;
 }
 
@@ -78,6 +87,8 @@ export interface LocalMonitorSnapshot {
   liveTestOrderBlockReasons?: string[];
   /** Count of accepted live test orders today (persisted under data/). */
   liveTestOrdersToday?: number;
+  /** 현금·미수불가 기준 주문 가드 스냅샷 (/live 배너·차단 사유). */
+  liveOrderFunding?: Record<string, unknown>;
   lastLiveTestOrderResult?: Record<string, unknown>;
   /** Live auto-trading loop — tick summary written each interval. */
   liveLoop?: Record<string, unknown>;

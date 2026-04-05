@@ -12,6 +12,7 @@ import type {
   MonitorAccountSummary,
   MonitorHoldingRow,
 } from "../infra/monitor-snapshot.js";
+import { detectCreditOrMarginRiskFromTop } from "./live-order-funding.js";
 
 export type KiwoomConnectStatus = "not_configured" | "connected" | "error";
 
@@ -99,6 +100,9 @@ function zeroCashSummary(): Pick<
   | "paymentAvailableKrw"
   | "orderAvailableKrw"
   | "totReBuyOrderAllowableKrw"
+  | "noMarginOrderCapKrw"
+  | "noMarginOrderCapSource"
+  | "accountCreditRisk"
 > {
   return {
     cashKrw: 0,
@@ -107,7 +111,35 @@ function zeroCashSummary(): Pick<
     paymentAvailableKrw: 0,
     orderAvailableKrw: 0,
     totReBuyOrderAllowableKrw: 0,
+    noMarginOrderCapKrw: 0,
+    noMarginOrderCapSource: "none",
+    accountCreditRisk: false,
   };
+}
+
+/** kt00005 상단: 미수불가 100% 주문가능 후보 키(환경변수로 재정의 가능). D+2(entr_d2)는 넣지 않음. */
+function pickNoMarginOrderCapFromKt00005(
+  rec: Record<string, unknown>
+): { krw: number; sourceKey: string | null } {
+  const raw = process.env.KIWOOM_KT00005_NO_MARGIN_CAP_KEYS?.trim();
+  const keys = raw
+    ? raw.split(",").map((s) => s.trim()).filter(Boolean)
+    : [
+        "nmr_ord_psbl_amt",
+        "cash_ord_psbl_amt",
+        "ord_psbl_amt_100",
+        "psbl_amt_100",
+        "ord_alowa",
+      ];
+
+  for (const k of keys) {
+    if (!(k in rec)) continue;
+    const v = pickNumeric(rec[k], []);
+    if (Number.isFinite(v) && v > 0) {
+      return { krw: Math.round(v), sourceKey: k };
+    }
+  }
+  return { krw: 0, sourceKey: null };
 }
 
 function roundKrw(n: number): number {
@@ -122,14 +154,26 @@ function enrichSummaryWithKt00005Cash(
   rec: Record<string, unknown>,
   s: MonitorAccountSummary
 ): MonitorAccountSummary {
+  const cashKrw = roundKrw(pickNumeric(rec.entr, []));
+  const picked = pickNoMarginOrderCapFromKt00005(rec);
+  const entrUsable = Number.isFinite(cashKrw) && cashKrw > 0;
+  const noMarginOrderCapKrw = picked.sourceKey
+    ? picked.krw
+    : entrUsable
+      ? cashKrw
+      : 0;
+  const noMarginOrderCapSource = picked.sourceKey ?? (entrUsable ? "entr_fallback" : "none");
   return {
     ...s,
-    cashKrw: roundKrw(pickNumeric(rec.entr, [])),
+    cashKrw,
     cashD1Krw: roundKrw(pickNumeric(rec.entr_d1, [])),
     cashD2Krw: roundKrw(pickNumeric(rec.entr_d2, [])),
     paymentAvailableKrw: roundKrw(pickNumeric(rec.pymn_alow_amt, [])),
     orderAvailableKrw: roundKrw(pickNumeric(rec.ord_alowa, [])),
     totReBuyOrderAllowableKrw: roundKrw(pickNumeric(rec.tot_re_buy_alowa, [])),
+    noMarginOrderCapKrw,
+    noMarginOrderCapSource,
+    accountCreditRisk: detectCreditOrMarginRiskFromTop(rec),
   };
 }
 
@@ -303,14 +347,14 @@ export async function fetchAccountInfo(
     rows.length > 0
       ? summarizeHoldings(rows)
       : fromTop ?? {
-        ...zeroCashSummary(),
-        totalEvalKrw: 0,
-        totalCostKrw: 0,
-        totalEvalPnlKrw: 0,
-        totalReturnPct: 0,
-        totalNetPnlKrw: 0,
-        note: "체결잔고 없음 (TR 응답 정상)",
-      };
+          ...zeroCashSummary(),
+          totalEvalKrw: 0,
+          totalCostKrw: 0,
+          totalEvalPnlKrw: 0,
+          totalReturnPct: 0,
+          totalNetPnlKrw: 0,
+          note: "체결잔고 없음 (TR 응답 정상)",
+        };
 
   if (topRec) {
     summary = enrichSummaryWithKt00005Cash(topRec, summary);

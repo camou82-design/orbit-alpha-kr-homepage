@@ -17,6 +17,10 @@ import { mergeMonitorSnapshot } from "../infra/monitor-snapshot.js";
 import { evaluateScore } from "../core/scoring.js";
 import { evaluateLiveOperationalOrderGate } from "./live-ops-guard.js";
 import { recordOrderAttempt, recordOrderBrokerResult } from "./live-ops-state.js";
+import {
+  evaluateCashOnlyBuyFunding,
+  snapshotToPlain,
+} from "./live-order-funding.js";
 
 /** Must match `LIVE_TEST_ORDER_CONFIRM` env exactly to allow a real test buy. */
 export const LIVE_TEST_ORDER_CONFIRM_VALUE = "EXECUTE_TEST_BUY_ONCE";
@@ -151,13 +155,12 @@ export async function submitLiveTestBuyOrderOnce(
     forcedSessionPhase: ctx.forcedSessionPhase,
   });
 
-  mergeMonitorSnapshot({
-    liveTestOrderEligible: guard.ok,
-    liveTestOrderBlockReasons: guard.reasons,
-    liveTestOrdersToday: getLiveTestOrdersToday(),
-  });
-
   if (!guard.ok) {
+    mergeMonitorSnapshot({
+      liveTestOrderEligible: false,
+      liveTestOrderBlockReasons: guard.reasons,
+      liveTestOrdersToday: getLiveTestOrdersToday(),
+    });
     logBlocked(logger, guard.reasons);
     mergeMonitorSnapshot({
       lastLiveTestOrderResult: { phase: "blocked", reasons: guard.reasons },
@@ -172,7 +175,43 @@ export async function submitLiveTestBuyOrderOnce(
       reason: "quote_price_invalid",
     });
     mergeMonitorSnapshot({
+      liveTestOrderEligible: false,
+      liveTestOrderBlockReasons: guard.reasons,
+      liveTestOrdersToday: getLiveTestOrdersToday(),
       lastLiveTestOrderResult: { phase: "blocked", reasons: ["quote_price_invalid"] },
+    });
+    return;
+  }
+
+  const requiredKrw = Math.round(price);
+  const fund = evaluateCashOnlyBuyFunding({
+    accountFetchOk: accountResult.ok,
+    accountSummary: accountResult.accountSummary,
+    requiredKrw,
+    accountCreditRisk: accountResult.accountSummary?.accountCreditRisk,
+  });
+
+  mergeMonitorSnapshot({
+    liveTestOrderEligible: guard.ok && fund.fundingGateOk,
+    liveTestOrderBlockReasons: fund.fundingGateOk
+      ? guard.reasons
+      : [...guard.reasons, "live_order_funding_blocked"],
+    liveTestOrdersToday: getLiveTestOrdersToday(),
+    liveOrderFunding: snapshotToPlain(fund),
+  });
+
+  if (!fund.fundingGateOk) {
+    logger.warn("live.order.blocked", {
+      msg: "live order blocked reason",
+      reason: "live_order_funding_blocked",
+      reasonKo: fund.reasonKo,
+    });
+    mergeMonitorSnapshot({
+      lastLiveTestOrderResult: {
+        phase: "blocked",
+        reasons: ["live_order_funding_blocked"],
+        reasonKo: fund.reasonKo,
+      },
     });
     return;
   }
