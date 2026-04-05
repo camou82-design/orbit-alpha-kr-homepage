@@ -14,8 +14,10 @@ import { hrefToPaperDashboard } from "../infra/cross-nav-links.js";
 import { buildLiveOpsControlRows } from "../infra/live-ops-banner.js";
 import { loadConfig, type AppConfig } from "../infra/config.js";
 import {
+  dashboardAbsolutePath,
   dashboardDefaultReturnPathLive,
   dashboardHttpAuthEnabled,
+  dashboardPublicMountLive,
   dashboardSessionSecretOk,
   dashboardSessionUsername,
   requireDashboardSession,
@@ -117,6 +119,9 @@ interface MonitorRenderCtx {
   config: AppConfig;
   opsState: LiveOpsStateFile;
   sessionUser: string | null;
+  /** 절대 경로 — 로그인 페이지에서 상대경로로 auth 중복 방지 */
+  authLoginAbs: string;
+  authLogoutAbs: string;
 }
 
 function renderPage(
@@ -629,9 +634,9 @@ function renderPage(
   if (!el) return;
   el.addEventListener("click", function(){
     if (!confirm("로그아웃 하시겠습니까?")) return;
-    fetch("auth/logout", { method: "POST", credentials: "include", redirect: "follow" })
-      .then(function(r){ location.replace(r.url || "auth/login"); })
-      .catch(function(){ location.replace("auth/login"); });
+    fetch(${JSON.stringify(ctx.authLogoutAbs)}, { method: "POST", credentials: "include", redirect: "follow" })
+      .then(function(r){ location.replace(r.url || ${JSON.stringify(ctx.authLoginAbs)}); })
+      .catch(function(){ location.replace(${JSON.stringify(ctx.authLoginAbs)}); });
   });
   if (window.history && window.history.replaceState) {
     history.replaceState(null, "", location.href);
@@ -678,7 +683,17 @@ async function handleMonitorRequest(
   const p = pathOnly(rawUrl);
   const qs = queryString(rawUrl);
 
-  if (await tryDashboardAuthRoutes(req, res, p, qs, dashboardDefaultReturnPathLive()))
+  const mount = dashboardPublicMountLive();
+  if (
+    await tryDashboardAuthRoutes(
+      req,
+      res,
+      p,
+      qs,
+      dashboardDefaultReturnPathLive(),
+      mount
+    )
+  )
     return;
 
   if (p === "/ops/control" && req.method === "POST") {
@@ -688,7 +703,8 @@ async function handleMonitorRequest(
       res.end(JSON.stringify({ ok: false, error: "dashboard_auth_required" }));
       return;
     }
-    if (!requireDashboardSession(req, res, dashboardDefaultReturnPathLive())) return;
+    if (!requireDashboardSession(req, res, dashboardDefaultReturnPathLive(), mount))
+      return;
     const user = dashboardSessionUsername(req);
     if (!user) {
       sendNoStoreHeaders(res);
@@ -728,7 +744,8 @@ async function handleMonitorRequest(
       res.end("method not allowed");
       return;
     }
-    if (!requireDashboardSession(req, res, dashboardDefaultReturnPathLive())) return;
+    if (!requireDashboardSession(req, res, dashboardDefaultReturnPathLive(), mount))
+      return;
     const path = getMonitorStatusPathForServer();
     let raw: string | null = null;
     let data: Record<string, unknown> | null = null;
@@ -752,6 +769,8 @@ async function handleMonitorRequest(
         config: cfg,
         opsState: opsSt,
         sessionUser,
+        authLoginAbs: dashboardAbsolutePath(mount, "/auth/login"),
+        authLogoutAbs: dashboardAbsolutePath(mount, "/auth/logout"),
       })
     );
     return;
@@ -763,7 +782,8 @@ async function handleMonitorRequest(
       res.end("method not allowed");
       return;
     }
-    if (!requireDashboardSession(req, res, dashboardDefaultReturnPathLive())) return;
+    if (!requireDashboardSession(req, res, dashboardDefaultReturnPathLive(), mount))
+      return;
     const statusPath = getMonitorStatusPathForServer();
     if (!existsSync(statusPath)) {
       if (dashboardHttpAuthEnabled()) sendNoStoreHeaders(res);

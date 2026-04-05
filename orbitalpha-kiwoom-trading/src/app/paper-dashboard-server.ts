@@ -15,8 +15,10 @@ import { getPaperDashboardPathForServer } from "../infra/paper-dashboard-snapsho
 import { hrefToLiveMonitor } from "../infra/cross-nav-links.js";
 import { formatMarketSessionKorean } from "../infra/live-ops-banner.js";
 import {
+  dashboardAbsolutePath,
   dashboardDefaultReturnPathPaper,
   dashboardHttpAuthEnabled,
+  dashboardPublicMountPaper,
   dashboardSessionSecretOk,
   requireDashboardSession,
   sendNoStoreHeaders,
@@ -139,7 +141,13 @@ function renderFills(rows: PaperFillRow[]): string {
     .join("\n");
 }
 
-function renderPage(data: PaperDashboardSnapshot, rawJson: string, hrefLive: string): string {
+function renderPage(
+  data: PaperDashboardSnapshot,
+  rawJson: string,
+  hrefLive: string,
+  authLoginAbs: string,
+  authLogoutAbs: string
+): string {
   const sessionKo = formatMarketSessionKorean(data.effectiveSessionPhase);
   const meta = [
     `tick ${data.tickIndex}`,
@@ -291,9 +299,9 @@ function renderPage(data: PaperDashboardSnapshot, rawJson: string, hrefLive: str
   if (!el) return;
   el.addEventListener("click", function(){
     if (!confirm("로그아웃 하시겠습니까?")) return;
-    fetch("auth/logout", { method: "POST", credentials: "include", redirect: "follow" })
-      .then(function(r){ location.replace(r.url || "auth/login"); })
-      .catch(function(){ location.replace("auth/login"); });
+    fetch(${JSON.stringify(authLogoutAbs)}, { method: "POST", credentials: "include", redirect: "follow" })
+      .then(function(r){ location.replace(r.url || ${JSON.stringify(authLoginAbs)}); })
+      .catch(function(){ location.replace(${JSON.stringify(authLoginAbs)}); });
   });
   if (window.history && window.history.replaceState) {
     history.replaceState(null, "", location.href);
@@ -324,7 +332,17 @@ async function handlePaperRequest(
   const p = pathOnly(rawUrl);
   const qs = queryString(rawUrl);
 
-  if (await tryDashboardAuthRoutes(req, res, p, qs, dashboardDefaultReturnPathPaper()))
+  const mount = dashboardPublicMountPaper();
+  if (
+    await tryDashboardAuthRoutes(
+      req,
+      res,
+      p,
+      qs,
+      dashboardDefaultReturnPathPaper(),
+      mount
+    )
+  )
     return;
 
   if (p === "/api/paper-dashboard") {
@@ -333,7 +351,8 @@ async function handlePaperRequest(
       res.end("method not allowed");
       return;
     }
-    if (!requireDashboardSession(req, res, dashboardDefaultReturnPathPaper())) return;
+    if (!requireDashboardSession(req, res, dashboardDefaultReturnPathPaper(), mount))
+      return;
     const data = loadSnapshot();
     if (dashboardHttpAuthEnabled()) sendNoStoreHeaders(res);
     res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
@@ -346,12 +365,21 @@ async function handlePaperRequest(
       res.end("method not allowed");
       return;
     }
-    if (!requireDashboardSession(req, res, dashboardDefaultReturnPathPaper())) return;
+    if (!requireDashboardSession(req, res, dashboardDefaultReturnPathPaper(), mount))
+      return;
     const data = loadSnapshot();
     const rawJson = JSON.stringify(data, null, 2);
     if (dashboardHttpAuthEnabled()) sendNoStoreHeaders(res);
     res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-    res.end(renderPage(data, rawJson, hrefToLiveMonitor(req)));
+    res.end(
+      renderPage(
+        data,
+        rawJson,
+        hrefToLiveMonitor(req),
+        dashboardAbsolutePath(mount, "/auth/login"),
+        dashboardAbsolutePath(mount, "/auth/logout")
+      )
+    );
     return;
   }
   res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });

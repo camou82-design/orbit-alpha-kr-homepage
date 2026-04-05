@@ -8,16 +8,68 @@ const TOKEN_PREFIX = "v1";
 const MAX_AGE_SEC = 12 * 3600;
 const MIN_SECRET_LEN = 16;
 
+function normalizePublicBase(raw: string | undefined): string {
+  if (!raw) return "";
+  let p = raw.trim();
+  if (p === "") return "";
+  if (!p.startsWith("/")) p = `/${p}`;
+  return p.replace(/\/+$/, "");
+}
+
+/**
+ * 브라우저 URL 기준 대시보드 앱 접두사 (선행 /, 후행 슬래시 없음).
+ * `KIWOOM_PUBLIC_BASE_PATH=/kiwoom` → `/kiwoom/live` — reverse proxy 하위 경로와 일치해야 함.
+ * 미설정(로컬 포트 직접 접속) → "" (`/auth/login` 등은 호스트 루트 기준).
+ */
+export function dashboardPublicMountLive(): string {
+  const base = normalizePublicBase(process.env.KIWOOM_PUBLIC_BASE_PATH);
+  if (base) return `${base}/live`;
+  return "";
+}
+
+export function dashboardPublicMountPaper(): string {
+  const base = normalizePublicBase(process.env.KIWOOM_PUBLIC_BASE_PATH);
+  if (base) return `${base}/paper`;
+  return "";
+}
+
+/**
+ * 마운트 + 경로를 하나의 절대 경로로 합침. 상대 문자열 이어붙이기 금지 — 항상 이 함수 사용.
+ * @param mount `dashboardPublicMountLive()` 등
+ * @param suffix `/auth/login`, `/` 등 (항상 선행 /)
+ */
+export function dashboardAbsolutePath(mount: string, suffix: string): string {
+  const s = suffix.startsWith("/") ? suffix : `/${suffix}`;
+  const m = (mount ?? "").replace(/\/+$/, "");
+  if (!m) return s.length > 1 ? s : "/";
+  return `${m}${s}`;
+}
+
+/** 로그인 페이지 URL (쿼리는 URLSearchParams로 부착, auth 중복 없음). */
+export function dashboardAuthLoginUrl(
+  mount: string,
+  query?: Record<string, string | undefined>
+): string {
+  const base = dashboardAbsolutePath(mount, "/auth/login");
+  if (!query) return base;
+  const sp = new URLSearchParams();
+  for (const [k, v] of Object.entries(query)) {
+    if (v !== undefined && v !== "") sp.set(k, v);
+  }
+  const q = sp.toString();
+  return q ? `${base}?${q}` : base;
+}
+
 /** 브라우저가 보는 LIVE 모니터 경로 (Nginx 하위 경로 배포 시 설정). */
 export function dashboardDefaultReturnPathLive(): string {
-  const base = process.env.KIWOOM_PUBLIC_BASE_PATH?.trim();
-  if (base) return `${base.replace(/\/+$/, "")}/live/`;
+  const m = dashboardPublicMountLive();
+  if (m) return `${m}/`;
   return "/";
 }
 
 export function dashboardDefaultReturnPathPaper(): string {
-  const base = process.env.KIWOOM_PUBLIC_BASE_PATH?.trim();
-  if (base) return `${base.replace(/\/+$/, "")}/paper/`;
+  const m = dashboardPublicMountPaper();
+  if (m) return `${m}/`;
   return "/";
 }
 
@@ -147,7 +199,8 @@ export function sendNoStoreHeaders(res: ServerResponse): void {
 export function requireDashboardSession(
   req: IncomingMessage,
   res: ServerResponse,
-  loginRedirectPath: string
+  loginRedirectPath: string,
+  mount: string
 ): boolean {
   if (!dashboardHttpAuthEnabled()) return true;
   if (!dashboardSessionSecretOk()) {
@@ -157,8 +210,10 @@ export function requireDashboardSession(
   }
   const u = dashboardSessionUsername(req);
   if (u) return true;
-  const next = encodeURIComponent(loginRedirectPath || "/");
-  res.writeHead(302, { Location: `auth/login?next=${next}` });
+  const nextPath = loginRedirectPath || "/";
+  res.writeHead(302, {
+    Location: dashboardAuthLoginUrl(mount, { next: nextPath }),
+  });
   res.end();
   return false;
 }
@@ -182,7 +237,8 @@ function escHtml(s: string): string {
 export async function handleDashboardLoginPost(
   req: IncomingMessage,
   res: ServerResponse,
-  defaultAfterLogin = "/"
+  defaultAfterLogin = "/",
+  mount = ""
 ): Promise<void> {
   if (!dashboardHttpAuthEnabled() || !dashboardSessionSecretOk()) {
     res.writeHead(400, { "Content-Type": "text/plain; charset=utf-8" });
@@ -210,7 +266,13 @@ export async function handleDashboardLoginPost(
     sendNoStoreHeaders(res);
     res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
     res.end(
-      renderLoginPage(next, "아이디 또는 비밀번호가 올바르지 않습니다.", false, null)
+      renderLoginPage(
+        next,
+        "아이디 또는 비밀번호가 올바르지 않습니다.",
+        false,
+        null,
+        mount
+      )
     );
     return;
   }
@@ -225,16 +287,19 @@ export async function handleDashboardLoginPost(
 
 export function handleDashboardLogoutPost(
   req: IncomingMessage,
-  res: ServerResponse
+  res: ServerResponse,
+  mount: string
 ): void {
   sendNoStoreHeaders(res);
   if (dashboardHttpAuthEnabled() && dashboardSessionSecretOk()) {
     res.writeHead(302, {
-      Location: "auth/login?bye=1",
+      Location: dashboardAuthLoginUrl(mount, { bye: "1" }),
       "Set-Cookie": setCookieHeader(req, null),
     });
   } else {
-    res.writeHead(302, { Location: "auth/login?noop=1" });
+    res.writeHead(302, {
+      Location: dashboardAuthLoginUrl(mount, { noop: "1" }),
+    });
   }
   res.end();
 }
@@ -247,7 +312,8 @@ export async function tryDashboardAuthRoutes(
   res: ServerResponse,
   path: string,
   qs: string,
-  defaultAfterLogin = "/"
+  defaultAfterLogin = "/",
+  mount = ""
 ): Promise<boolean> {
   if (path === "/auth/login") {
     if (req.method === "GET") {
@@ -265,12 +331,14 @@ export async function tryDashboardAuthRoutes(
       if (noop === "1") info = "서버 측 대시보드 세션을 사용하지 않는 구성입니다.";
       sendNoStoreHeaders(res);
       res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-      res.end(renderLoginPage(next, null, !dashboardHttpAuthEnabled(), info));
+      res.end(
+        renderLoginPage(next, null, !dashboardHttpAuthEnabled(), info, mount)
+      );
       return true;
     }
     if (req.method === "POST") {
       sendNoStoreHeaders(res);
-      await handleDashboardLoginPost(req, res, defaultAfterLogin);
+      await handleDashboardLoginPost(req, res, defaultAfterLogin, mount);
       return true;
     }
     res.writeHead(405, { "Content-Type": "text/plain; charset=utf-8" });
@@ -281,7 +349,7 @@ export async function tryDashboardAuthRoutes(
   if (path === "/auth/logout") {
     if (req.method === "POST") {
       sendNoStoreHeaders(res);
-      handleDashboardLogoutPost(req, res);
+      handleDashboardLogoutPost(req, res, mount);
       return true;
     }
     res.writeHead(405, { "Content-Type": "text/plain; charset=utf-8" });
@@ -296,12 +364,15 @@ export function renderLoginPage(
   next: string,
   error: string | null,
   authDisabled: boolean,
-  info: string | null = null
+  info: string | null = null,
+  mount = ""
 ): string {
+  const loginAction = dashboardAbsolutePath(mount, "/auth/login");
+  const dashboardRootHref = dashboardAbsolutePath(mount, "/");
   const errBlock = error ? `<p style="color:#b00020;font-size:13px">${escHtml(error)}</p>` : "";
   const infoBlock = info ? `<p style="color:#2e7d32;font-size:13px">${escHtml(info)}</p>` : "";
   const note = authDisabled
-    ? `<p style="color:#555;font-size:13px">대시보드 HTTP 인증이 꺼져 있습니다. 서버는 브라우저 로그인 세션을 유지하지 않습니다.</p><p><a href="../">대시보드로 돌아가기</a></p>`
+    ? `<p style="color:#555;font-size:13px">대시보드 HTTP 인증이 꺼져 있습니다. 서버는 브라우저 로그인 세션을 유지하지 않습니다.</p><p><a href="${escAttr(dashboardRootHref)}">대시보드로 돌아가기</a></p>`
     : "";
   return `<!DOCTYPE html>
 <html lang="ko">
@@ -323,7 +394,7 @@ export function renderLoginPage(
     <h1>Kiwoom 운영 대시보드</h1>
     ${infoBlock}
     ${note}
-    ${authDisabled ? "" : `<form method="post" action="auth/login">
+    ${authDisabled ? "" : `<form method="post" action="${escAttr(loginAction)}">
       <input type="hidden" name="next" value="${escAttr(next)}" />
       <label>아이디 <input name="username" autocomplete="username" required /></label>
       <label>비밀번호 <input name="password" type="password" autocomplete="current-password" required /></label>
