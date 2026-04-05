@@ -39,6 +39,12 @@ export type FuturesPaperDataBundle = Readonly<{
    * Single source for UI; avoids stale `dashboard.json` / `summary*.json` vs ledger drift.
    */
   ledgerPerformance: FuturesPaperLedgerPerformance | null;
+  /** Positions currently open (`positions/open.json`). */
+  openPositions: unknown[];
+  /** Full history for raw display. */
+  positionsHistory: unknown[];
+  /** Bundle generation timestamp (epoch ms). */
+  generatedAt: number;
 }>;
 
 async function readJsonFile(filePath: string): Promise<unknown | null> {
@@ -82,6 +88,17 @@ function pickSymbolRows(latest: unknown): FuturesPaperSymbolRow[] {
 
 async function readPositionsHistoryArray(dataDir: string): Promise<unknown[]> {
   const p = path.join(dataDir, "positions", "history.json");
+  try {
+    const raw = await fs.readFile(p, "utf8");
+    const parsed = JSON.parse(raw) as unknown;
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+async function readPositionsOpenArray(dataDir: string): Promise<unknown[]> {
+  const p = path.join(dataDir, "positions", "open.json");
   try {
     const raw = await fs.readFile(p, "utf8");
     const parsed = JSON.parse(raw) as unknown;
@@ -146,10 +163,11 @@ export async function loadFuturesPaperBundleFromDiskRoot(projectRoot: string): P
     readJsonFile(path.join(snaps, "latest-meta.json"))
   ]);
 
-  const [symbolRows, healthHistoryRecent, positionsHistory] = await Promise.all([
+  const [symbolRows, healthHistoryRecent, positionsHistory, openPositions] = await Promise.all([
     Promise.resolve(pickSymbolRows(latestSnapshot)),
     readHealthHistoryTail(dataDir, 10),
-    readPositionsHistoryArray(dataDir)
+    readPositionsHistoryArray(dataDir),
+    readPositionsOpenArray(dataDir)
   ]);
 
   const generatedAt = Date.now();
@@ -167,6 +185,9 @@ export async function loadFuturesPaperBundleFromDiskRoot(projectRoot: string): P
     latestMeta,
     symbolRows,
     healthHistoryRecent,
-    ledgerPerformance
+    ledgerPerformance,
+    openPositions,
+    positionsHistory,
+    generatedAt
   };
 }
