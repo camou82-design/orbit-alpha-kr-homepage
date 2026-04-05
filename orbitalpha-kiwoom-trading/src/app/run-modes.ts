@@ -207,6 +207,24 @@ export async function runLiveMode(logger: Logger, config: AppConfig): Promise<vo
     logger.warn("kiwoom.connect", { msg: "error", detail: connectResult.message });
   }
 
+  // ---------------------------------------------------------------
+  // LIVE_AUTO_LOOP_ENABLED 분기
+  // ---------------------------------------------------------------
+  const autoLoopEnabled = process.env.LIVE_AUTO_LOOP_ENABLED === "true";
+
+  if (autoLoopEnabled) {
+    logger.info("live.loop.start", { mode: "auto-loop-enabled" });
+    await startLiveLoop(config, logger);
+    return; // 루프가 종료될 때까지 대기, 종료 후 리턴 (아래 기존 로직 건너뜀)
+  }
+
+  logger.info("live.auto_loop.skip", {
+    msg: "auto-trading loop inactive (set LIVE_AUTO_LOOP_ENABLED=true to enable)",
+  });
+
+  // ---------------------------------------------------------------
+  // 아래는 LIVE_AUTO_LOOP_ENABLED != "true" 일 때 실행되는 기존 one-shot 로직
+  // ---------------------------------------------------------------
   const state = { dailyLossKrw: 0, openPositionsCount: 0 };
   const testSymbol = config.liveTestAllowedSymbol.trim() || "005930";
   const intent: LiveDryRunIntent = {
@@ -274,20 +292,4 @@ export async function runLiveMode(logger: Logger, config: AppConfig): Promise<vo
     effectiveSessionPhase,
     forcedSessionPhase,
   });
-
-  // ---------------------------------------------------------------
-  // 자동매매 루프: LIVE_AUTO_LOOP_ENABLED=true 일 때만 진입
-  // (기존 one-shot test buy 경로 유지; 루프는 SIGINT까지 장중 반복)
-  // ---------------------------------------------------------------
-  const autoLoopEnabled = (process.env.LIVE_AUTO_LOOP_ENABLED ?? "").trim().toLowerCase() === "true";
-  if (autoLoopEnabled) {
-    logger.info("live.auto_loop.enter", {
-      msg: "LIVE_AUTO_LOOP_ENABLED=true — starting auto-trading loop",
-    });
-    await startLiveLoop(config, logger);
-  } else {
-    logger.info("live.auto_loop.skip", {
-      msg: "auto-trading loop inactive (set LIVE_AUTO_LOOP_ENABLED=true to enable)",
-    });
-  }
 }
