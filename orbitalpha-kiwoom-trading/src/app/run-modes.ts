@@ -23,6 +23,7 @@ import { getEffectiveMarketSessionPhase } from "../kiwoom/market-hours.js";
 import { BasicUniverseFilter } from "../kiwoom/basic-universe-filter.js";
 import { MockMarketDataAdapter } from "../kiwoom/mock-market-data.js";
 import { preparePaperEngine, startPaperLoop } from "../paper/paper-engine.js";
+import { startLiveLoop } from "../live/live-loop.js";
 
 export function resolveInitialEntryMode(
   config: AppConfig
@@ -72,21 +73,21 @@ function buildLiveMonitorAccountSnapshot(
     accountResult.ok && accountResult.accountSummary
       ? accountResult.accountSummary
       : {
-          totalEvalKrw: 0,
-          totalCostKrw: 0,
-          totalEvalPnlKrw: 0,
-          totalReturnPct: 0,
-          totalNetPnlKrw: 0,
-          cashKrw: 0,
-          cashD1Krw: 0,
-          cashD2Krw: 0,
-          paymentAvailableKrw: 0,
-          orderAvailableKrw: 0,
-          totReBuyOrderAllowableKrw: 0,
-          note: !configured
-            ? "키움 연결 정보 미설정 — 합계·보유 없음"
-            : "실계좌 조회 실패 또는 응답 파싱 불가 — 로그·HTS와 대조",
-        };
+        totalEvalKrw: 0,
+        totalCostKrw: 0,
+        totalEvalPnlKrw: 0,
+        totalReturnPct: 0,
+        totalNetPnlKrw: 0,
+        cashKrw: 0,
+        cashD1Krw: 0,
+        cashD2Krw: 0,
+        paymentAvailableKrw: 0,
+        orderAvailableKrw: 0,
+        totReBuyOrderAllowableKrw: 0,
+        note: !configured
+          ? "키움 연결 정보 미설정 — 합계·보유 없음"
+          : "실계좌 조회 실패 또는 응답 파싱 불가 — 로그·HTS와 대조",
+      };
   const holdings = accountResult.ok && accountResult.holdings ? accountResult.holdings : [];
   const connectionStatus =
     connectResult.status === "connected" ? "connected" : connectResult.status;
@@ -273,4 +274,20 @@ export async function runLiveMode(logger: Logger, config: AppConfig): Promise<vo
     effectiveSessionPhase,
     forcedSessionPhase,
   });
+
+  // ---------------------------------------------------------------
+  // 자동매매 루프: LIVE_AUTO_LOOP_ENABLED=true 일 때만 진입
+  // (기존 one-shot test buy 경로 유지; 루프는 SIGINT까지 장중 반복)
+  // ---------------------------------------------------------------
+  const autoLoopEnabled = (process.env.LIVE_AUTO_LOOP_ENABLED ?? "").trim().toLowerCase() === "true";
+  if (autoLoopEnabled) {
+    logger.info("live.auto_loop.enter", {
+      msg: "LIVE_AUTO_LOOP_ENABLED=true — starting auto-trading loop",
+    });
+    await startLiveLoop(config, logger);
+  } else {
+    logger.info("live.auto_loop.skip", {
+      msg: "auto-trading loop inactive (set LIVE_AUTO_LOOP_ENABLED=true to enable)",
+    });
+  }
 }

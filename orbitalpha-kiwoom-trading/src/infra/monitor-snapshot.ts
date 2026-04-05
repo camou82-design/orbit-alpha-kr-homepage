@@ -79,6 +79,8 @@ export interface LocalMonitorSnapshot {
   /** Count of accepted live test orders today (persisted under data/). */
   liveTestOrdersToday?: number;
   lastLiveTestOrderResult?: Record<string, unknown>;
+  /** Live auto-trading loop — tick summary written each interval. */
+  liveLoop?: Record<string, unknown>;
 }
 
 /**
