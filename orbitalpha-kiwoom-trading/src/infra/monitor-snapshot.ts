@@ -1,5 +1,5 @@
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, isAbsolute, join } from "node:path";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 
 /** Account strip totals — real HTS feed can replace stub zeros later. */
 export interface MonitorAccountSummary {
@@ -89,15 +89,40 @@ export interface LocalMonitorSnapshot {
  */
 function defaultPath(): string {
   const fileOverride = process.env.MONITOR_STATUS_FILE?.trim();
+  const fallback = join(process.cwd(), "data", "monitor-status.json");
+
+  // Priority 1: .env override
   if (fileOverride && fileOverride.length > 0) {
-    return isAbsolute(fileOverride) ? fileOverride : join(process.cwd(), fileOverride);
+    const resolved = isAbsolute(fileOverride)
+      ? resolve(fileOverride)
+      : resolve(process.cwd(), fileOverride);
+
+    // 로그: 해석된 결과가 존재하지 않으면 사용자에게 알림 (부장님 지시: 로그 필수)
+    if (!existsSync(resolved)) {
+      console.warn(
+        `[monitor-snapshot] Configured path not found: ${resolved}. Falling back to default: ${fallback}`
+      );
+      return fallback;
+    }
+    return resolved;
   }
+
+  // Priority 2: Project root based path
   const projectRoot = process.env.KIWOOM_PROJECT_ROOT?.trim();
   if (projectRoot && projectRoot.length > 0) {
-    const root = isAbsolute(projectRoot) ? projectRoot : join(process.cwd(), projectRoot);
-    return join(root, "data", "monitor-status.json");
+    const root = isAbsolute(projectRoot) ? resolve(projectRoot) : resolve(process.cwd(), projectRoot);
+    const resolved = resolve(root, "data", "monitor-status.json");
+    if (!existsSync(resolved)) {
+      console.warn(
+        `[monitor-snapshot] Root-based path not found: ${resolved}. Falling back to default: ${fallback}`
+      );
+      return fallback;
+    }
+    return resolved;
   }
-  return join(process.cwd(), "data", "monitor-status.json");
+
+  // Priority 3: Final fallback
+  return fallback;
 }
 
 function readExisting(path: string): Partial<LocalMonitorSnapshot> {

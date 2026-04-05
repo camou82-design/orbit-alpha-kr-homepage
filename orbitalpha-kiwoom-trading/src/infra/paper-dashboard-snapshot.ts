@@ -1,5 +1,5 @@
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, isAbsolute, join } from "node:path";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import type { PaperPosition } from "../core/types.js";
 import type {
   PumpEntryExclusion,
@@ -193,15 +193,39 @@ export function buildPaperDashboardSnapshot(params: {
 
 function defaultPath(): string {
   const fileOverride = process.env.PAPER_DASHBOARD_FILE?.trim();
+  const fallback = join(process.cwd(), "data", "paper-dashboard.json");
+
+  // Priority 1: .env override
   if (fileOverride && fileOverride.length > 0) {
-    return isAbsolute(fileOverride) ? fileOverride : join(process.cwd(), fileOverride);
+    const resolved = isAbsolute(fileOverride)
+      ? resolve(fileOverride)
+      : resolve(process.cwd(), fileOverride);
+
+    if (!existsSync(resolved)) {
+      console.warn(
+        `[paper-dashboard-snapshot] Configured path not found: ${resolved}. Falling back to default: ${fallback}`
+      );
+      return fallback;
+    }
+    return resolved;
   }
+
+  // Priority 2: Project root based path
   const projectRoot = process.env.KIWOOM_PROJECT_ROOT?.trim();
   if (projectRoot && projectRoot.length > 0) {
-    const root = isAbsolute(projectRoot) ? projectRoot : join(process.cwd(), projectRoot);
-    return join(root, "data", "paper-dashboard.json");
+    const root = isAbsolute(projectRoot) ? resolve(projectRoot) : resolve(process.cwd(), projectRoot);
+    const resolved = resolve(root, "data", "paper-dashboard.json");
+    if (!existsSync(resolved)) {
+      console.warn(
+        `[paper-dashboard-snapshot] Root-based path not found: ${resolved}. Falling back to default: ${fallback}`
+      );
+      return fallback;
+    }
+    return resolved;
   }
-  return join(process.cwd(), "data", "paper-dashboard.json");
+
+  // Priority 3: Final fallback
+  return fallback;
 }
 
 /** Full replace each tick — paper loop only; no live imports. */

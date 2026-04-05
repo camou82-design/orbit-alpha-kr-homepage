@@ -12,6 +12,7 @@
     "live:local": "npm run live:test",
     "live:all": "concurrently -k -n engine,monitor -c cyan,magenta \"npm run live:test\" \"npm run monitor\"",
     "monitor": "tsx src/app/monitor-server.ts",
+    "paper": "npm run paper:ui",
     "paper:ui": "tsx src/app/paper-dashboard-server.ts",
     "paper:engine": "cross-env APP_ENTRY_MODE=paper AUTH_ENABLED=false tsx src/app/main.ts",
     "paper:all": "concurrently -k -n paper,ui -c green,blue \"cross-env APP_ENTRY_MODE=paper npm start\" \"npm run paper:ui\"",

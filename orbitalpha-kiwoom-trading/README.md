@@ -7,7 +7,7 @@
 | 단계 | 할 일 |
 | --- | --- |
 | 1 | `npm install` (최초 1회) |
-| 2 | `npm run paper:ui` — 전용 대시보드만 기동 **또는** `npm run paper:all` — paper 엔진(`npm start`)과 대시보드를 동시에 실행 |
+| 2 | `npm run paper` 또는 `npm run paper:ui` — 전용 대시보드만 기동 **또는** `npm run paper:all` — paper 엔진과 대시보드 동시 |
 | 3 | 브라우저 **http://127.0.0.1:3002** (`PAPER_DASHBOARD_PORT`로 포트 변경 가능) |
 
 엔진만 따로 띄운 경우에는 `npm start` (기본 paper 모드) 후, 다른 터미널에서 `npm run paper:ui`를 실행하면 스냅샷이 갱신됩니다.

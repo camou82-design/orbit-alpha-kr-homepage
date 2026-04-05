@@ -11,16 +11,23 @@ npm ci
 npm run build
 ```
 
-## 2. 운영 `.env` (예시 키)
+## 2. 운영 `.env` (프로젝트 루트 단일 파일)
+
+**원칙:** `orbitalpha-kiwoom-trading/.env` 하나에 넣고, PM2는 `ecosystem.config.cjs`가 해당 파일을 `dotenv`로 읽어 **live/monitor/paper 네 앱 모두**에 같은 변수를 넘깁니다. 별도 `.env.production` 분기 없음.
+
+필수(실계좌 잔고·스냅샷):
+
+- `KIWOOM_ACCOUNT_NO`, `KIWOOM_API_KEY`, `KIWOOM_API_SECRET` — 비어 있으면 live 엔진이 “not configured”로 스냅샷만 갱신하지 못함
+- `MONITOR_STATUS_FILE` / `PAPER_DASHBOARD_FILE` — **절대 경로**로 통일 (예: `/home/admin/orbit-alpha-kr-homepage/orbitalpha-kiwoom-trading/data/monitor-status.json`)
+
+권장:
 
 - `NODE_ENV=production`
-- `KIWOOM_PUBLIC_BASE_PATH=/kiwoom`
-- `MONITOR_HOST=127.0.0.1`
-- `PAPER_DASHBOARD_HOST=127.0.0.1`
-- `MONITOR_PORT=3001`
-- `PAPER_DASHBOARD_PORT=3002`
-- **스냅샷 경로 고정(권장):** 엔진과 `npm run monitor`의 `process.cwd()`가 다르면 구버전 JSON을 읽을 수 있음. 예: `MONITOR_STATUS_FILE=/home/admin/.../orbitalpha-kiwoom-trading/data/monitor-status.json` (절대 경로) 또는 `KIWOOM_PROJECT_ROOT`를 동일 값으로 설정.
-- 기존 `KIWOOM_*`·`LIVE_*`·`PAPER_*` 등은 운영값 유지 (가드 완화 금지)
+- `KIWOOM_PUBLIC_BASE_PATH=/kiwoom` (Nginx 하위 경로와 상호 링크)
+- `MONITOR_HOST=127.0.0.1`, `PAPER_DASHBOARD_HOST=127.0.0.1`, `MONITOR_PORT=3001`, `PAPER_DASHBOARD_PORT=3002`
+- 기존 `LIVE_*`·`PAPER_*` 등 운영값 유지 (가드 완화 금지)
+
+**Paper 대시보드만 단독 기동:** `npm run paper` (= `paper:ui`). 엔진+UI 동시: `npm run paper:all`.
 
 ## 3. PM2
 
