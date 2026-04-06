@@ -19,7 +19,10 @@ import {
   type MonitorHoldingRow,
 } from "../infra/monitor-snapshot.js";
 import type { KiwoomAccountInfoResult, KiwoomConnectResult } from "../live/kiwoom-client.js";
-import { getEffectiveMarketSessionPhase } from "../kiwoom/market-hours.js";
+import {
+  getEffectiveMarketSessionPhase,
+  seoulWallClockForLog,
+} from "../kiwoom/market-hours.js";
 import { BasicUniverseFilter } from "../kiwoom/basic-universe-filter.js";
 import { MockMarketDataAdapter } from "../kiwoom/mock-market-data.js";
 import { preparePaperEngine, startPaperLoop } from "../paper/paper-engine.js";
@@ -188,11 +191,13 @@ export async function runLiveMode(logger: Logger, config: AppConfig): Promise<vo
     now,
     config.forceSessionPhase
   );
+  const seoulClock = seoulWallClockForLog(now);
   logger.info("market.session", {
     msg: "detected",
     effectiveSessionPhase,
     forcedSessionPhase,
     ts: now.toISOString(),
+    ...seoulClock,
   });
   mergeMonitorSnapshot({
     marketSessionDetected: {
@@ -200,6 +205,7 @@ export async function runLiveMode(logger: Logger, config: AppConfig): Promise<vo
       effectiveSessionPhase,
       forcedSessionPhase,
       ts: now.toISOString(),
+      ...seoulClock,
     },
   });
 
