@@ -158,10 +158,7 @@ export function computeSnapshotBannerModel(
     quoteReceive = quoteStale(quoteQueriedAt, 120) ? "지연" : "정상";
   }
 
-  const blockReasons = (data?.dryRunBlockReasons ??
-    (data?.liveDryRunDecision as { reasons?: string[] } | undefined)?.reasons) as
-    | string[]
-    | undefined;
+  /** 전략 auto-live dry-run 전용 — 메인 실주문 배너 사유에는 사용하지 않음 (monitor JSON·별도 UI). */
   const testBlockReasons = data?.liveTestOrderBlockReasons as string[] | undefined;
 
   const liveTestOrderEligible = data?.liveTestOrderEligible as boolean | undefined;
@@ -198,7 +195,7 @@ export function computeSnapshotBannerModel(
   } else {
     actualOrderState = "제한";
     blockReasonLine =
-      pickFirstReasonLine(testBlockReasons, blockReasons) ??
+      pickFirstReasonLine(testBlockReasons) ??
       "테스트 실주문 가드 미통과로 주문이 제한됩니다";
   }
 
