@@ -431,7 +431,7 @@ function extractLastPrice(json: unknown): number | null {
 function extractPrevClosePrice(json: unknown): number | null {
   if (json === null || json === undefined) return null;
   const rec = json as Record<string, unknown>;
-  const keys = ["stck_sdpr", "prev_close", "sdpr", "pre_close"];
+  const keys = ["stck_sdpr", "pred_close_pric", "prev_close", "sdpr", "pre_close"];
 
   for (const k of keys) {
     if (k in rec) {
@@ -459,7 +459,7 @@ function extractPrevClosePrice(json: unknown): number | null {
 function extractTurnover(json: unknown): number | null {
   if (json === null || json === undefined) return null;
   const rec = json as Record<string, unknown>;
-  const keys = ["acml_tr_pbmn", "tr_amt", "turnover", "acml_vol_amt"];
+  const keys = ["acml_tr_pbmn", "trde_prica", "tr_amt", "turnover", "acml_vol_amt"];
 
   for (const k of keys) {
     if (k in rec) {
@@ -510,11 +510,11 @@ export async function fetchQuote(
   }
 
   const body: Record<string, unknown> = { stk_cd: sym };
-  /** ka10001: 공식 Python 클라이언트와 동일 — `/api/dostk/stkinfo` + cont-yn / next-key. */
+  /** 실매매 시세: ka10007 시세표성정보요청 — `/api/dostk/mrkcond` (stkinfo/ka10001과 분리). */
   const tr = await kiwoomTrPost(
     config,
     token.accessToken,
-    config.kiwoomRestStkPath,
+    config.kiwoomRestQuotePath,
     config.kiwoomTrQuoteId,
     body,
     { "cont-yn": "N", "next-key": "0" }
@@ -524,7 +524,7 @@ export async function fetchQuote(
     const shape = describeJsonShape(tr.json);
     logger.info("quote.real.debug", {
       msg: "quote real fetch http/tr error",
-      endpoint: config.kiwoomRestStkPath,
+      endpoint: config.kiwoomRestQuotePath,
       apiId: config.kiwoomTrQuoteId,
       symbol: sym,
       httpStatus: tr.httpStatus,
@@ -549,7 +549,7 @@ export async function fetchQuote(
     const shape = describeJsonShape(tr.json);
     logger.info("quote.real.debug", {
       msg: "quote real fetch parse_no_price",
-      endpoint: config.kiwoomRestStkPath,
+      endpoint: config.kiwoomRestQuotePath,
       apiId: config.kiwoomTrQuoteId,
       symbol: sym,
       httpStatus: tr.httpStatus,
@@ -568,7 +568,7 @@ export async function fetchQuote(
   logger.info("kiwoom.quote", { msg: "fetch ok", symbol: sym, lastPrice, prevClose, turnover });
   logger.info("quote.real.debug", {
     msg: "quote real parse",
-    endpoint: config.kiwoomRestStkPath,
+    endpoint: config.kiwoomRestQuotePath,
     apiId: config.kiwoomTrQuoteId,
     symbol: sym,
     httpStatus: tr.httpStatus,

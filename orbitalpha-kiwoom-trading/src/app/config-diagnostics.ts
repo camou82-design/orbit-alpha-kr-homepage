@@ -83,5 +83,8 @@ export function buildConfigLoadedSnapshot(config: AppConfig): Record<string, unk
     snapshotCwd: process.cwd(),
     monitorStatusFilePath: getMonitorStatusPathForServer(),
     kiwoomConnectionConfigured: isKiwoomConnectionConfigured(config),
+    kiwoomRestQuotePath: config.kiwoomRestQuotePath,
+    kiwoomTrQuoteId: config.kiwoomTrQuoteId,
+    kiwoomRestStkPath: config.kiwoomRestStkPath,
   };
 }

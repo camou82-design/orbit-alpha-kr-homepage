@@ -100,10 +100,14 @@ export interface AppConfig {
   kiwoomRestBaseUrl: string;
   kiwoomRestOAuthPath: string;
   kiwoomRestAcntPath: string;
+  /** ka10001 등 종목 기본정보용 (`/api/dostk/stkinfo`). 실시간 매매 시세에는 사용하지 않음. */
   kiwoomRestStkPath: string;
+  /** 실시간 시세 TR (기본 ka10007 시세표성정보, `/api/dostk/mrkcond`). */
+  kiwoomRestQuotePath: string;
   kiwoomRestOrdrPath: string;
   /** TR api-id headers for REST calls. */
   kiwoomTrBalanceId: string;
+  /** 기본 ka10007 (시세표성정보요청, 응답에 cur_prc 명시). stkinfo/ka10001과 분리. */
   kiwoomTrQuoteId: string;
   kiwoomTrBuyId: string;
   /** Scoped live test buy only — requires LIVE_TRADING_ENABLED and strict guards. */
@@ -329,11 +333,12 @@ export function loadConfig(): AppConfig {
     kiwoomRestBaseUrl: process.env.KIWOOM_REST_BASE_URL ?? "https://api.kiwoom.com",
     kiwoomRestOAuthPath: process.env.KIWOOM_REST_OAUTH_PATH ?? "/oauth2/token",
     kiwoomRestAcntPath: process.env.KIWOOM_REST_ACNT_PATH ?? "/api/dostk/acnt",
-    /** ka10001 등 종목정보 TR은 공식 예시가 `/api/dostk/stkinfo` ( `/api/dostk/stk` 는 ka10001 미지원 ). */
+    /** 종목 기본정보(ka10001) — 매매 시세용이 아님. */
     kiwoomRestStkPath: process.env.KIWOOM_REST_STK_PATH ?? "/api/dostk/stkinfo",
+    kiwoomRestQuotePath: process.env.KIWOOM_REST_QUOTE_PATH ?? "/api/dostk/mrkcond",
     kiwoomRestOrdrPath: process.env.KIWOOM_REST_ORDR_PATH ?? "/api/dostk/ordr",
     kiwoomTrBalanceId: process.env.KIWOOM_TR_BALANCE ?? "kt00005",
-    kiwoomTrQuoteId: process.env.KIWOOM_TR_QUOTE ?? "ka10001",
+    kiwoomTrQuoteId: process.env.KIWOOM_TR_QUOTE ?? "ka10007",
     kiwoomTrBuyId: process.env.KIWOOM_TR_BUY ?? "kt10000",
     liveTestOrderEnabled: bool(process.env.LIVE_TEST_ORDER_ENABLED, false),
     liveTestMaxQty: Math.floor(num(process.env.LIVE_TEST_MAX_QTY, 0)),
