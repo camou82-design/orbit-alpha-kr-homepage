@@ -29,6 +29,9 @@ export interface KiwoomAccountInfoResult {
   accountSummary?: MonitorAccountSummary;
 }
 
+/** 라이브 루프 격리 판단용 (oauth/config 전역 실패는 블록하지 않음). */
+export type KiwoomQuoteFailureKind = "config" | "oauth" | "tr" | "parse";
+
 export interface KiwoomQuoteResult {
   ok: boolean;
   symbol: string;
@@ -36,6 +39,8 @@ export interface KiwoomQuoteResult {
   prevClose?: number | null;
   turnover?: number | null;
   message: string;
+  failureKind?: KiwoomQuoteFailureKind;
+  quoteSource?: "primary" | "fallback";
 }
 
 function maskAccount(no: string): string {
@@ -484,6 +489,56 @@ function extractTurnover(json: unknown): number | null {
   return null;
 }
 
+function emitQuoteSuccess(
+  logger: Logger,
+  sym: string,
+  lastPrice: number,
+  prevClose: number | null,
+  turnover: number | null,
+  endpoint: string,
+  apiId: string,
+  httpStatus: number,
+  quoteSource: "primary" | "fallback"
+): KiwoomQuoteResult {
+  logger.info("kiwoom.quote", {
+    msg: "fetch ok",
+    symbol: sym,
+    lastPrice,
+    prevClose,
+    turnover,
+    quoteSource,
+  });
+  logger.info("quote.real.debug", {
+    msg: "quote real parse",
+    symbol: sym,
+    endpoint,
+    apiId,
+    httpStatus,
+    quoteSource,
+  });
+  logger.info("quote.real.parse", {
+    msg: "quote real parse summary",
+    symbol: sym,
+    lastPrice,
+    quoteSource,
+  });
+  logger.info("quote.real", {
+    msg: "quote real fetch success",
+    symbol: sym,
+    lastPrice,
+    quoteSource,
+  });
+  return {
+    ok: true,
+    symbol: sym,
+    lastPrice,
+    prevClose,
+    turnover,
+    message: "ok",
+    quoteSource,
+  };
+}
+
 export async function fetchQuote(
   logger: Logger,
   config: AppConfig,
@@ -495,8 +550,12 @@ export async function fetchQuote(
   if (!isKiwoomConnectionConfigured(config)) {
     const message = "skipped — Kiwoom connection not configured";
     logger.info("kiwoom.quote", { msg: "not_configured", reason: message });
-    logger.info("quote.real", { msg: "quote real fetch fail", symbol: sym, reason: "not_configured" });
-    return { ok: false, symbol: sym, message };
+    logger.info("quote.real", {
+      msg: "quote real fetch fail",
+      symbol: sym,
+      reason: "not_configured",
+    });
+    return { ok: false, symbol: sym, message, failureKind: "config" };
   }
 
   const token = await fetchKiwoomAccessToken(config);
@@ -506,27 +565,35 @@ export async function fetchQuote(
       symbol: sym,
       reason: "oauth_failed",
     });
-    return { ok: false, symbol: sym, message: token.message };
+    return {
+      ok: false,
+      symbol: sym,
+      message: token.message,
+      failureKind: "oauth",
+    };
   }
 
   const body: Record<string, unknown> = { stk_cd: sym };
-  /** 실매매 시세: ka10007 시세표성정보요청 — `/api/dostk/mrkcond` (stkinfo/ka10001과 분리). */
+  const headers = { "cont-yn": "N", "next-key": "0" };
+
+  /** 실매매 1차: ka10007 등 — `/api/dostk/mrkcond`. */
   const tr = await kiwoomTrPost(
     config,
     token.accessToken,
     config.kiwoomRestQuotePath,
     config.kiwoomTrQuoteId,
     body,
-    { "cont-yn": "N", "next-key": "0" }
+    headers
   );
 
   if (!tr.ok) {
     const shape = describeJsonShape(tr.json);
     logger.info("quote.real.debug", {
       msg: "quote real fetch http/tr error",
+      symbol: sym,
+      quoteSource: "primary",
       endpoint: config.kiwoomRestQuotePath,
       apiId: config.kiwoomTrQuoteId,
-      symbol: sym,
       httpStatus: tr.httpStatus,
       topLevelKeys: shape.topLevelKeys,
       outputArrayLength: shape.outputArrayLength,
@@ -536,55 +603,148 @@ export async function fetchQuote(
       msg: "quote real fetch fail",
       symbol: sym,
       reason: "tr_error",
+      quoteSource: "primary",
       detail: tr.message,
     });
-    return { ok: false, symbol: sym, message: tr.message };
+    return {
+      ok: false,
+      symbol: sym,
+      message: tr.message,
+      failureKind: "tr",
+    };
   }
 
-  const lastPrice = extractLastPrice(tr.json);
-  const prevClose = extractPrevClosePrice(tr.json);
-  const turnover = extractTurnover(tr.json);
+  let lastPrice = extractLastPrice(tr.json);
+  let prevClose = extractPrevClosePrice(tr.json);
+  let turnover = extractTurnover(tr.json);
+
+  if (lastPrice !== null) {
+    return emitQuoteSuccess(
+      logger,
+      sym,
+      lastPrice,
+      prevClose,
+      turnover,
+      config.kiwoomRestQuotePath,
+      config.kiwoomTrQuoteId,
+      tr.httpStatus,
+      "primary"
+    );
+  }
+
+  const shapePrimary = describeJsonShape(tr.json);
+  logger.info("quote.real.debug", {
+    msg: "quote real fetch parse_no_price",
+    symbol: sym,
+    quoteSource: "primary",
+    endpoint: config.kiwoomRestQuotePath,
+    apiId: config.kiwoomTrQuoteId,
+    httpStatus: tr.httpStatus,
+    topLevelKeys: shapePrimary.topLevelKeys,
+    outputArrayLength: shapePrimary.outputArrayLength,
+    firstRowKeys: shapePrimary.firstRowKeys,
+  });
+
+  if (!config.kiwoomQuoteFallbackEnabled) {
+    logger.info("quote.real", {
+      msg: "quote real fetch fail",
+      symbol: sym,
+      reason: "no_price_in_response",
+      quoteSource: "primary",
+    });
+    return {
+      ok: false,
+      symbol: sym,
+      message: "could not parse last price",
+      failureKind: "parse",
+    };
+  }
+
+  /** 2차: 종목정보 TR (매매 판단 보조용 fallback, stkinfo). */
+  logger.info("quote.real.fallback", {
+    msg: "attempt stkinfo quote fallback",
+    symbol: sym,
+    endpoint: config.kiwoomRestStkPath,
+    apiId: config.kiwoomTrQuoteFallbackId,
+  });
+
+  const trFb = await kiwoomTrPost(
+    config,
+    token.accessToken,
+    config.kiwoomRestStkPath,
+    config.kiwoomTrQuoteFallbackId,
+    body,
+    headers
+  );
+
+  if (!trFb.ok) {
+    const shapeFb = describeJsonShape(trFb.json);
+    logger.info("quote.real.debug", {
+      msg: "quote real fetch http/tr error",
+      symbol: sym,
+      quoteSource: "fallback",
+      endpoint: config.kiwoomRestStkPath,
+      apiId: config.kiwoomTrQuoteFallbackId,
+      httpStatus: trFb.httpStatus,
+      topLevelKeys: shapeFb.topLevelKeys,
+      outputArrayLength: shapeFb.outputArrayLength,
+      firstRowKeys: shapeFb.firstRowKeys,
+    });
+    logger.info("quote.real", {
+      msg: "quote real fetch fail",
+      symbol: sym,
+      reason: "tr_error",
+      quoteSource: "fallback",
+      detail: trFb.message,
+    });
+    return {
+      ok: false,
+      symbol: sym,
+      message: trFb.message,
+      failureKind: "tr",
+    };
+  }
+
+  lastPrice = extractLastPrice(trFb.json);
+  prevClose = extractPrevClosePrice(trFb.json);
+  turnover = extractTurnover(trFb.json);
 
   if (lastPrice === null) {
-    const shape = describeJsonShape(tr.json);
+    const shapeFb2 = describeJsonShape(trFb.json);
     logger.info("quote.real.debug", {
       msg: "quote real fetch parse_no_price",
-      endpoint: config.kiwoomRestQuotePath,
-      apiId: config.kiwoomTrQuoteId,
       symbol: sym,
-      httpStatus: tr.httpStatus,
-      topLevelKeys: shape.topLevelKeys,
-      outputArrayLength: shape.outputArrayLength,
-      firstRowKeys: shape.firstRowKeys,
+      quoteSource: "fallback",
+      endpoint: config.kiwoomRestStkPath,
+      apiId: config.kiwoomTrQuoteFallbackId,
+      httpStatus: trFb.httpStatus,
+      topLevelKeys: shapeFb2.topLevelKeys,
+      outputArrayLength: shapeFb2.outputArrayLength,
+      firstRowKeys: shapeFb2.firstRowKeys,
     });
     logger.info("quote.real", {
       msg: "quote real fetch fail",
       symbol: sym,
       reason: "no_price_in_response",
+      quoteSource: "fallback",
     });
-    return { ok: false, symbol: sym, message: "could not parse last price" };
+    return {
+      ok: false,
+      symbol: sym,
+      message: "could not parse last price",
+      failureKind: "parse",
+    };
   }
 
-  logger.info("kiwoom.quote", { msg: "fetch ok", symbol: sym, lastPrice, prevClose, turnover });
-  logger.info("quote.real.debug", {
-    msg: "quote real parse",
-    endpoint: config.kiwoomRestQuotePath,
-    apiId: config.kiwoomTrQuoteId,
-    symbol: sym,
-    httpStatus: tr.httpStatus,
-  });
-  logger.info("quote.real.parse", {
-    msg: "quote real parse summary",
-    symbol: sym,
-    lastPrice,
-  });
-  logger.info("quote.real", { msg: "quote real fetch success", symbol: sym, lastPrice });
-  return {
-    ok: true,
-    symbol: sym,
+  return emitQuoteSuccess(
+    logger,
+    sym,
     lastPrice,
     prevClose,
     turnover,
-    message: "ok",
-  };
+    config.kiwoomRestStkPath,
+    config.kiwoomTrQuoteFallbackId,
+    trFb.httpStatus,
+    "fallback"
+  );
 }

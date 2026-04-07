@@ -109,6 +109,10 @@ export interface AppConfig {
   kiwoomTrBalanceId: string;
   /** 기본 ka10007 (시세표성정보요청, 응답에 cur_prc 명시). stkinfo/ka10001과 분리. */
   kiwoomTrQuoteId: string;
+  /** Primary TR가 가격 미수신일 때 stkinfo + 이 TR로 1회 재시도 (기본 ka10001). */
+  kiwoomTrQuoteFallbackId: string;
+  /** Primary에서 lastPrice 파싱 실패 시 fallback 호출 여부. */
+  kiwoomQuoteFallbackEnabled: boolean;
   kiwoomTrBuyId: string;
   /** Scoped live test buy only — requires LIVE_TRADING_ENABLED and strict guards. */
   liveTestOrderEnabled: boolean;
@@ -339,6 +343,8 @@ export function loadConfig(): AppConfig {
     kiwoomRestOrdrPath: process.env.KIWOOM_REST_ORDR_PATH ?? "/api/dostk/ordr",
     kiwoomTrBalanceId: process.env.KIWOOM_TR_BALANCE ?? "kt00005",
     kiwoomTrQuoteId: process.env.KIWOOM_TR_QUOTE ?? "ka10007",
+    kiwoomTrQuoteFallbackId: process.env.KIWOOM_TR_QUOTE_FALLBACK ?? "ka10001",
+    kiwoomQuoteFallbackEnabled: bool(process.env.KIWOOM_QUOTE_FALLBACK_ENABLED, true),
     kiwoomTrBuyId: process.env.KIWOOM_TR_BUY ?? "kt10000",
     liveTestOrderEnabled: bool(process.env.LIVE_TEST_ORDER_ENABLED, false),
     liveTestMaxQty: Math.floor(num(process.env.LIVE_TEST_MAX_QTY, 0)),

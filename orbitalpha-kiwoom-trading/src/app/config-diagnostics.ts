@@ -86,5 +86,7 @@ export function buildConfigLoadedSnapshot(config: AppConfig): Record<string, unk
     kiwoomRestQuotePath: config.kiwoomRestQuotePath,
     kiwoomTrQuoteId: config.kiwoomTrQuoteId,
     kiwoomRestStkPath: config.kiwoomRestStkPath,
+    kiwoomTrQuoteFallbackId: config.kiwoomTrQuoteFallbackId,
+    kiwoomQuoteFallbackEnabled: config.kiwoomQuoteFallbackEnabled,
   };
 }

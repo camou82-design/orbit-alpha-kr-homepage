@@ -84,6 +84,12 @@ const LIVE_ENTRY_MIN_SCORE = 42;         // 최소 진입 점수
 // -----------------------------------------------------------------
 let _dailyRealizedPnlKrw = 0;
 
+/**
+ * 시세 실패(parse/tr) 종목 — 다음 틱부터 유니버스 스캔에서 생략.
+ * 보유 중인 종목은 청산 시세가 필요하므로 항상 재조회한다.
+ */
+const liveQuoteScanBlockedSymbols = new Set<string>();
+
 // -----------------------------------------------------------------
 // JSONL 주문/체결 로그 경로
 // -----------------------------------------------------------------
@@ -349,51 +355,94 @@ async function runLiveOneTick(
     const records: SignalRecord[] = [];
     const quoteMap = new Map<string, { lastPrice: number; prevClose: number; turnover: number; name: string; status: string; upperLimit?: number | null }>();
 
+    const heldSymbols = new Set(getLivePositions().map((p) => p.symbol));
+    let quoteFetched = 0;
+    let quoteSuccessN = 0;
+    let quoteFailN = 0;
+    let quoteSkippedBlocked = 0;
+
     for (const symbol of universeSymbols) {
+        const skipForBlock = liveQuoteScanBlockedSymbols.has(symbol) && !heldSymbols.has(symbol);
+        if (skipForBlock) {
+            quoteSkippedBlocked += 1;
+            continue;
+        }
+
         try {
+            quoteFetched += 1;
             const q = await fetchQuote(logger, config, symbol);
-            if (!q.ok || q.lastPrice == null) continue;
+            if (q.ok && q.lastPrice != null) {
+                liveQuoteScanBlockedSymbols.delete(symbol);
+                quoteSuccessN += 1;
 
-            const price = q.lastPrice;
-            const prevClose = q.prevClose ?? 0;
-            const turnover = q.turnover ?? 0;
+                const price = q.lastPrice;
+                const prevClose = q.prevClose ?? 0;
+                const turnover = q.turnover ?? 0;
 
-            quoteMap.set(symbol, {
-                lastPrice: price,
-                prevClose,
-                turnover,
-                name: symbol,
-                status: "NORMAL",
-            });
+                quoteMap.set(symbol, {
+                    lastPrice: price,
+                    prevClose,
+                    turnover,
+                    name: symbol,
+                    status: "NORMAL",
+                });
 
-            const input: ScoringInput = {
-                price,
-                prevClose,
-                turnover,
-                isTradable: true,
-            };
-            const { score, reason } = evaluateScore(input);
-            const candidate =
-                score >= config.signalCandidateMinScore && effectiveSessionPhase === "REGULAR";
+                const input: ScoringInput = {
+                    price,
+                    prevClose,
+                    turnover,
+                    isTradable: true,
+                };
+                const { score, reason } = evaluateScore(input);
+                const candidate =
+                    score >= config.signalCandidateMinScore && effectiveSessionPhase === "REGULAR";
 
-            records.push({
-                candidate_at: now.toISOString(),
-                timestamp: now.toISOString(),
-                sessionPhase: effectiveSessionPhase,
-                symbol,
-                price,
-                turnover,
-                score,
-                reason,
-                candidate,
-                status: "CANDIDATE",
-                upperLimitPrice: null,
-                upperLimitHeadroomPct: null,
-            });
+                records.push({
+                    candidate_at: now.toISOString(),
+                    timestamp: now.toISOString(),
+                    sessionPhase: effectiveSessionPhase,
+                    symbol,
+                    price,
+                    turnover,
+                    score,
+                    reason,
+                    candidate,
+                    status: "CANDIDATE",
+                    upperLimitPrice: null,
+                    upperLimitHeadroomPct: null,
+                });
+            } else {
+                quoteFailN += 1;
+                if (
+                    (q.failureKind === "parse" || q.failureKind === "tr") &&
+                    !heldSymbols.has(symbol)
+                ) {
+                    liveQuoteScanBlockedSymbols.add(symbol);
+                }
+                logger.info("live.loop.quote.unavailable", {
+                    symbol,
+                    failureKind: q.failureKind,
+                    message: q.message,
+                });
+            }
         } catch (e) {
+            quoteFailN += 1;
             logger.warn("live.loop.quote.error", { symbol, error: String(e) });
+            if (!heldSymbols.has(symbol)) {
+                liveQuoteScanBlockedSymbols.add(symbol);
+            }
         }
     }
+
+    logger.info("live.loop.quote.scan", {
+        tick: tickIndex,
+        universeSize: universeSymbols.length,
+        fetched: quoteFetched,
+        success: quoteSuccessN,
+        failed: quoteFailN,
+        skippedBlocked: quoteSkippedBlocked,
+        scanBlockedSymbols: [...liveQuoteScanBlockedSymbols].sort(),
+    });
 
     // 신호 JSONL 저장
     if (records.length > 0) {
@@ -708,6 +757,13 @@ async function runLiveOneTick(
             openPositions: snapshotLivePositions(),
             dailyRealizedPnlKrw: _dailyRealizedPnlKrw,
             scanned: records.length,
+            quoteScanBlockedSymbols: [...liveQuoteScanBlockedSymbols].sort(),
+            quoteScanStats: {
+                fetched: quoteFetched,
+                success: quoteSuccessN,
+                failed: quoteFailN,
+                skippedBlocked: quoteSkippedBlocked,
+            },
         },
     });
 
