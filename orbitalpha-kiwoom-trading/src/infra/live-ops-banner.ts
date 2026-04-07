@@ -48,16 +48,26 @@ export function mergeMonitorDataWithEngineMirror(
         msg: typeof prev.msg === "string" ? prev.msg : "detected",
       };
     }
+    const testBlockReasons = Array.isArray(m.testBlockReasons) ? m.testBlockReasons : [];
+
     if (typeof m.realOrderEligible === "boolean") {
       out.liveTestOrderEligible = m.realOrderEligible;
+
+      if (m.realOrderEligible === true) {
+        out.liveTestOrderBlockReasons = [];
+      } else {
+        out.liveTestOrderBlockReasons = testBlockReasons;
+      }
     } else {
       const inferred = inferRealOrderEligibleFromEngineMirror(m);
+
       out.liveTestOrderEligible = inferred;
-    }
-    if (out.liveTestOrderEligible === true) {
-      out.liveTestOrderBlockReasons = [];
-    } else if (Array.isArray(m.testBlockReasons)) {
-      out.liveTestOrderBlockReasons = m.testBlockReasons;
+
+      if (inferred === true) {
+        out.liveTestOrderBlockReasons = [];
+      } else {
+        out.liveTestOrderBlockReasons = testBlockReasons;
+      }
     }
     if (Array.isArray(m.blockReasons)) {
       out.dryRunBlockReasons = m.blockReasons;
@@ -233,6 +243,7 @@ export function computeSnapshotBannerModel(
 
   let actualOrderState: LiveOpsOrderState;
   let blockReasonLine: string;
+  const eligibleForced = liveTestOrderEligible === true;
 
   if (startupError) {
     actualOrderState = "차단";
@@ -257,9 +268,10 @@ export function computeSnapshotBannerModel(
         : sessionMarket === "미확인"
           ? "장 운영 상태를 확인할 수 없어 실주문을 차단합니다"
           : "장외 시간으로 실주문 차단";
-  } else if (liveTestOrderEligible === true) {
+  } else if (eligibleForced) {
     actualOrderState = "가능";
-    blockReasonLine = "현재 테스트 실주문 허용 조건을 충족했습니다";
+    // 절대 규칙: realOrderEligible === true면 NO/차단 사유/ live_trading_disabled 출력 금지
+    blockReasonLine = "";
   } else {
     actualOrderState = "제한";
     blockReasonLine =
@@ -271,6 +283,7 @@ export function computeSnapshotBannerModel(
     | { fundingGateOk?: boolean; reasonKo?: string }
     | undefined;
   if (
+    !eligibleForced &&
     fund != null &&
     fund.fundingGateOk === false &&
     sessionOk &&
@@ -296,7 +309,7 @@ export function computeSnapshotBannerModel(
 
   let realOrderYesNo: LiveOpsBannerModel["realOrderYesNo"] =
     actualOrderState === "가능" ? "YES" : "NO";
-  if (options?.dataIncomplete && liveConfigOnOff === "상태 정보 부족") {
+  if (actualOrderState !== "가능" && options?.dataIncomplete && liveConfigOnOff === "상태 정보 부족") {
     realOrderYesNo = "—";
   }
 
