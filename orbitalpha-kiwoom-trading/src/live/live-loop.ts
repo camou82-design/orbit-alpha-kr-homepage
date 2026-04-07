@@ -420,7 +420,9 @@ async function runLiveOneTick(
                     liveQuoteScanBlockedSymbols.add(symbol);
                 }
                 logger.info("live.loop.quote.unavailable", {
+                    msg: "live.loop.quote.unavailable",
                     symbol,
+                    quoteSource: q.quoteSource,
                     failureKind: q.failureKind,
                     message: q.message,
                 });
@@ -435,6 +437,7 @@ async function runLiveOneTick(
     }
 
     logger.info("live.loop.quote.scan", {
+        msg: "live.loop.quote.scan",
         tick: tickIndex,
         universeSize: universeSymbols.length,
         fetched: quoteFetched,
@@ -751,6 +754,7 @@ async function runLiveOneTick(
         accountQueriedAt: tickAccountQueriedAt,
         liveOrderFunding: snapshotToPlain(fundingForMonitor),
         liveLoop: {
+            msg: "live.loop.quote.scan",
             tick: tickIndex,
             ts: now.toISOString(),
             sessionPhase: effectiveSessionPhase,
@@ -759,6 +763,7 @@ async function runLiveOneTick(
             scanned: records.length,
             quoteScanBlockedSymbols: [...liveQuoteScanBlockedSymbols].sort(),
             quoteScanStats: {
+                msg: "live.loop.quote.scan",
                 fetched: quoteFetched,
                 success: quoteSuccessN,
                 failed: quoteFailN,

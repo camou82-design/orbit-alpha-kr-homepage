@@ -507,6 +507,7 @@ function emitQuoteSuccess(
     prevClose,
     turnover,
     quoteSource,
+    failureKind: "ok",
   });
   logger.info("quote.real.debug", {
     msg: "quote real parse",
@@ -515,18 +516,21 @@ function emitQuoteSuccess(
     apiId,
     httpStatus,
     quoteSource,
+    failureKind: "ok",
   });
   logger.info("quote.real.parse", {
     msg: "quote real parse summary",
     symbol: sym,
     lastPrice,
     quoteSource,
+    failureKind: "ok",
   });
   logger.info("quote.real", {
     msg: "quote real fetch success",
     symbol: sym,
     lastPrice,
     quoteSource,
+    failureKind: "ok",
   });
   return {
     ok: true,
@@ -554,6 +558,8 @@ export async function fetchQuote(
       msg: "quote real fetch fail",
       symbol: sym,
       reason: "not_configured",
+      quoteSource: "none",
+      failureKind: "config",
     });
     return { ok: false, symbol: sym, message, failureKind: "config" };
   }
@@ -564,6 +570,8 @@ export async function fetchQuote(
       msg: "quote real fetch fail",
       symbol: sym,
       reason: "oauth_failed",
+      quoteSource: "none",
+      failureKind: "oauth",
     });
     return {
       ok: false,
@@ -604,6 +612,7 @@ export async function fetchQuote(
       symbol: sym,
       reason: "tr_error",
       quoteSource: "primary",
+      failureKind: "tr",
       detail: tr.message,
     });
     return {
@@ -651,6 +660,7 @@ export async function fetchQuote(
       symbol: sym,
       reason: "no_price_in_response",
       quoteSource: "primary",
+      failureKind: "parse",
     });
     return {
       ok: false,
@@ -662,8 +672,10 @@ export async function fetchQuote(
 
   /** 2차: 종목정보 TR (매매 판단 보조용 fallback, stkinfo). */
   logger.info("quote.real.fallback", {
-    msg: "attempt stkinfo quote fallback",
+    msg: "quote.real.fallback attempt stkinfo",
     symbol: sym,
+    quoteSource: "fallback",
+    failureKind: "none",
     endpoint: config.kiwoomRestStkPath,
     apiId: config.kiwoomTrQuoteFallbackId,
   });
@@ -695,6 +707,7 @@ export async function fetchQuote(
       symbol: sym,
       reason: "tr_error",
       quoteSource: "fallback",
+      failureKind: "tr",
       detail: trFb.message,
     });
     return {
@@ -727,6 +740,7 @@ export async function fetchQuote(
       symbol: sym,
       reason: "no_price_in_response",
       quoteSource: "fallback",
+      failureKind: "parse",
     });
     return {
       ok: false,
