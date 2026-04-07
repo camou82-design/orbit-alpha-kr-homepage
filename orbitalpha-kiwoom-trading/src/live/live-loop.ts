@@ -788,8 +788,8 @@ async function runLiveOneTick(
 function resolveUniverseSymbols(config: AppConfig): string[] {
     const raw = (process.env.LIVE_UNIVERSE_SYMBOLS ?? "").trim();
     if (raw) return raw.split(",").map((s) => s.trim()).filter(Boolean);
-    // 기본값: 삼성전자, SK하이닉스, LG에너지솔루션 (유동성 우수 대형주)
-    return ["005930", "000660", "373220"];
+    // 기본값: 삼성전자, SK하이닉스 (시세 안정·유동성 우수 대형주; 373220 등은 env로만 추가)
+    return ["005930", "000660"];
 }
 
 // -----------------------------------------------------------------
