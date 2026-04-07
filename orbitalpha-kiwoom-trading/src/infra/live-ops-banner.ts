@@ -13,13 +13,58 @@ export type LiveOpsOrderState = "가능" | "제한" | "차단";
 
 export interface LiveOpsBannerModel {
   overallState: "주문 가능" | "제한됨" | "차단됨";
-  realOrderYesNo: "YES" | "NO";
+  realOrderYesNo: "YES" | "NO" | "—";
   blockReasonLine: string;
-  sessionMarket: "정규장" | "장외" | "미확인";
+  sessionMarket: "정규장" | "장외" | "미확인" | "상태 정보 부족";
   accountLookup: "정상" | "실패" | "미확인";
   quoteReceive: "정상" | "지연" | "실패" | "미확인";
-  liveConfigOnOff: "ON" | "OFF";
+  liveConfigOnOff: "ON" | "OFF" | "상태 정보 부족";
   actualOrderState: LiveOpsOrderState;
+}
+
+export function mergeMonitorDataWithEngineMirror(
+  data: Record<string, unknown> | null,
+  ops: LiveOpsStateFile
+): { merged: Record<string, unknown> | null; dataIncomplete: boolean } {
+  const m = ops.engineMirror;
+  const out: Record<string, unknown> = { ...(data ?? {}) };
+  const cl = { ...((out.configLoaded as Record<string, unknown>) ?? {}) };
+  if (m) {
+    if (typeof m.liveTradingEnabled === "boolean") {
+      cl.liveTradingEnabled = m.liveTradingEnabled;
+    }
+    if (typeof m.liveConfirmationRequired === "boolean") {
+      cl.liveConfirmationRequired = m.liveConfirmationRequired;
+    }
+    if (m.effectiveSessionPhase) {
+      const prev = (out.marketSessionDetected as Record<string, unknown> | undefined) ?? {};
+      out.marketSessionDetected = {
+        ...prev,
+        effectiveSessionPhase: m.effectiveSessionPhase,
+        forcedSessionPhase: m.forcedSessionPhase,
+        msg: typeof prev.msg === "string" ? prev.msg : "detected",
+      };
+    }
+    if (typeof m.realOrderEligible === "boolean") {
+      out.liveTestOrderEligible = m.realOrderEligible;
+    }
+    if (Array.isArray(m.testBlockReasons)) {
+      out.liveTestOrderBlockReasons = m.testBlockReasons;
+    }
+    if (Array.isArray(m.blockReasons)) {
+      out.dryRunBlockReasons = m.blockReasons;
+    }
+    out.configLoaded = cl;
+  } else {
+    out.configLoaded = cl;
+  }
+
+  const clFinal = out.configLoaded as Record<string, unknown> | undefined;
+  const hasTradingFlag = typeof clFinal?.liveTradingEnabled === "boolean";
+  const dataIncomplete =
+    !hasTradingFlag &&
+    typeof m?.liveTradingEnabled !== "boolean";
+  return { merged: out, dataIncomplete };
 }
 
 export interface LiveOpsExtendedBanner {
@@ -123,7 +168,8 @@ function quoteStale(quoteAt: string | undefined, staleSec: number): boolean {
 
 /** 스냅샷만 반영 (엔진 연동·장·키움). */
 export function computeSnapshotBannerModel(
-  data: Record<string, unknown> | null
+  data: Record<string, unknown> | null,
+  options?: { dataIncomplete?: boolean }
 ): LiveOpsBannerModel {
   const startupError = typeof data?.startupError === "string" ? data.startupError : "";
   const livePathError = typeof data?.livePathError === "string" ? data.livePathError : "";
@@ -131,8 +177,14 @@ export function computeSnapshotBannerModel(
   const configLoaded = data?.configLoaded as Record<string, unknown> | undefined;
   const kiwoomConfigured = configLoaded?.kiwoomConnectionConfigured === true;
   const liveTradingFlag = configLoaded?.liveTradingEnabled;
-  const liveConfigOnOff: "ON" | "OFF" =
-    liveTradingFlag === true ? "ON" : "OFF";
+  const liveConfigOnOff: LiveOpsBannerModel["liveConfigOnOff"] =
+    typeof liveTradingFlag === "boolean"
+      ? liveTradingFlag
+        ? "ON"
+        : "OFF"
+      : options?.dataIncomplete
+        ? "상태 정보 부족"
+        : "OFF";
 
   const accountRealFetchOk = data?.accountRealFetchOk as boolean | undefined;
   const quoteRealFetchOk = data?.quoteRealFetchOk as boolean | undefined;
@@ -143,7 +195,13 @@ export function computeSnapshotBannerModel(
     | { effectiveSessionPhase?: string }
     | undefined;
   const sessionMarketRaw = formatMarketSessionKorean(market?.effectiveSessionPhase);
-  const sessionMarket = sessionMarketRaw as LiveOpsBannerModel["sessionMarket"];
+  let sessionMarket = sessionMarketRaw as LiveOpsBannerModel["sessionMarket"];
+  if (
+    options?.dataIncomplete &&
+    (market?.effectiveSessionPhase === undefined || market?.effectiveSessionPhase === "")
+  ) {
+    sessionMarket = "상태 정보 부족";
+  }
 
   const accountLookup: LiveOpsBannerModel["accountLookup"] =
     accountRealFetchOk === true
@@ -186,9 +244,11 @@ export function computeSnapshotBannerModel(
   } else if (!sessionOk) {
     actualOrderState = "차단";
     blockReasonLine =
-      sessionMarket === "미확인"
-        ? "장 운영 상태를 확인할 수 없어 실주문을 차단합니다"
-        : "장외 시간으로 실주문 차단";
+      sessionMarket === "상태 정보 부족"
+        ? "상태 정보 부족 — 엔진이 기록한 장 세션 정보가 없습니다 (monitor-status / live-ops-state 엔진 미러 확인)"
+        : sessionMarket === "미확인"
+          ? "장 운영 상태를 확인할 수 없어 실주문을 차단합니다"
+          : "장외 시간으로 실주문 차단";
   } else if (liveTestOrderEligible === true) {
     actualOrderState = "가능";
     blockReasonLine = "현재 테스트 실주문 허용 조건을 충족했습니다";
@@ -226,7 +286,11 @@ export function computeSnapshotBannerModel(
         ? "제한됨"
         : "차단됨";
 
-  const realOrderYesNo: "YES" | "NO" = actualOrderState === "가능" ? "YES" : "NO";
+  let realOrderYesNo: LiveOpsBannerModel["realOrderYesNo"] =
+    actualOrderState === "가능" ? "YES" : "NO";
+  if (options?.dataIncomplete && liveConfigOnOff === "상태 정보 부족") {
+    realOrderYesNo = "—";
+  }
 
   return {
     overallState,
@@ -270,7 +334,8 @@ export function buildLiveOpsControlRows(
   ext: LiveOpsExtendedBanner;
   envWarnings: string[];
 } {
-  const base = computeSnapshotBannerModel(data);
+  const { merged, dataIncomplete } = mergeMonitorDataWithEngineMirror(data, ops);
+  const base = computeSnapshotBannerModel(merged, { dataIncomplete });
   const envWarnings = liveOpsEnvWarningsForBanner();
   const sym = cfg.liveTestAllowedSymbol.trim() || "005930";
   const opG = evaluateLiveOperationalOrderGate(cfg, { symbol: sym, side: "BUY" });

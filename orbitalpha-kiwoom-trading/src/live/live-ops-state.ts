@@ -3,6 +3,26 @@ import { dirname, isAbsolute, join, resolve } from "node:path";
 
 export const LIVE_OPS_STATE_SCHEMA = 1 as const;
 
+/**
+ * 엔진이 monitor-status와 동일 시점에 기록하는 스냅샷 (모니터 UI가 monitor 파일 없이도 판단 가능).
+ * `killSwitchActive` 등 운영 필드는 루트에 유지.
+ */
+export interface LiveOpsEngineMirror {
+  updatedAt: string;
+  liveTradingEnabled?: boolean;
+  liveConfirmationRequired?: boolean;
+  effectiveSessionPhase?: string;
+  forcedSessionPhase?: boolean;
+  /** 테스트 실주문 1회 경로 기준 허용 여부 (자동 루프는 false·미설정 가능) */
+  realOrderEligible?: boolean;
+  /** LIVE_TRADING_ENABLED (전략 실주문 게이트) */
+  liveStrategyGate?: boolean;
+  /** 전략 dry-run 등 차단 코드 */
+  blockReasons?: string[];
+  /** liveTestOrderBlockReasons */
+  testBlockReasons?: string[];
+}
+
 export interface LiveOpsStateFile {
   schemaVersion: typeof LIVE_OPS_STATE_SCHEMA;
   updatedAt: string;
@@ -25,6 +45,8 @@ export interface LiveOpsStateFile {
   /** 손실 한도 초과로 매수만 정지 */
   lossHaltActive: boolean;
   lossHaltReasonKo?: string;
+  /** 엔진 마지막 동기화 스냅샷 (monitor-status 미수신·구버전 대비) */
+  engineMirror?: LiveOpsEngineMirror;
 }
 
 function todayKst(): string {
@@ -72,6 +94,7 @@ function emptyStateForDay(day: string, carryKillFrom?: LiveOpsStateFile): LiveOp
     dailyRealizedPnlKrw: 0,
     lossHaltActive: false,
     lossHaltReasonKo: undefined,
+    engineMirror: undefined,
   };
 }
 
@@ -105,6 +128,10 @@ export function readLiveOpsState(): LiveOpsStateFile {
         : 0,
       killSwitchActive: Boolean(j.killSwitchActive),
       lossHaltActive: Boolean(j.lossHaltActive),
+      engineMirror:
+        j.engineMirror && typeof j.engineMirror === "object"
+          ? (j.engineMirror as LiveOpsEngineMirror)
+          : undefined,
     });
     if (rolled.tradingDay !== j.tradingDay) {
       writeLiveOpsState(rolled);
@@ -128,6 +155,25 @@ export function writeLiveOpsState(state: LiveOpsStateFile): void {
   const tmp = `${path}.${process.pid}.tmp`;
   writeFileSync(tmp, JSON.stringify(next, null, 2), "utf8");
   renameSync(tmp, path);
+}
+
+/** 엔진이 monitor-status와 같은 값으로 갱신 — 모니터가 구버전 JSON만 읽어도 판단 가능. */
+export function syncEngineMirrorToLiveOpsState(
+  patch: Omit<LiveOpsEngineMirror, "updatedAt">
+): LiveOpsStateFile {
+  const s = mutateLiveOpsState((st) => {
+    st.engineMirror = {
+      updatedAt: new Date().toISOString(),
+      ...patch,
+    };
+  });
+  console.info("[live-ops-state] engineMirror synced", {
+    updatedAt: s.engineMirror?.updatedAt,
+    liveTradingEnabled: s.engineMirror?.liveTradingEnabled,
+    effectiveSessionPhase: s.engineMirror?.effectiveSessionPhase,
+    realOrderEligible: s.engineMirror?.realOrderEligible,
+  });
+  return s;
 }
 
 export function mutateLiveOpsState(mutator: (s: LiveOpsStateFile) => void): LiveOpsStateFile {

@@ -70,6 +70,7 @@ export function buildConfigLoadedSnapshot(config: AppConfig): Record<string, unk
     appEntryMode: config.appEntryMode,
     authBypassRole: config.authBypassRole,
     liveTradingEnabled: config.liveTradingEnabled,
+    liveConfirmationRequired: config.liveConfirmationRequired,
     liveTradingEnabledRaw: process.env.LIVE_TRADING_ENABLED ?? "",
     liveTestOrderEnabled: config.liveTestOrderEnabled,
     liveTestOrderEnabledRaw: process.env.LIVE_TEST_ORDER_ENABLED ?? "",

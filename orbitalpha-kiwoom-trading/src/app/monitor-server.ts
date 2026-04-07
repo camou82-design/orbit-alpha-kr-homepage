@@ -212,10 +212,15 @@ function renderPage(
     ? `<span class="muted" style="display:block;margin-top:0.25rem;color:#856404"><strong>스냅샷 주의:</strong> 이 JSON이 구버전이거나 엔진이 이 경로에서 쓰지 않은 파일일 수 있습니다. 엔진을 <strong>orbitalpha-kiwoom-trading</strong> 루트에서 다시 실행하거나 <code>/api/status</code>의 <code>configLoaded.monitorStatusFilePath</code>를 확인하세요.</span>`
     : "";
 
+  const engineMirrorHtml = ctx.opsState.engineMirror
+    ? `<div class="panel-title" style="margin-top:0.75rem">엔진 미러 <span class="muted" style="font-weight:400">(engineMirror — 엔진과 동기화)</span></div>
+<pre class="raw-pre" style="max-height:14rem;overflow:auto;background:#f8f9fa;border:1px solid #dee2e6;padding:0.5rem;border-radius:4px;font-size:11px">${escPre(JSON.stringify(ctx.opsState.engineMirror, null, 2))}</pre>`
+    : `<div class="muted" style="margin-top:0.75rem;font-size:12px">엔진 미러 없음 — 엔진(live 경로 또는 루프) 실행 후 <code>live-ops-state.json</code>에 기록됩니다.</div>`;
+
   const stCls = (s: string): string =>
     s === "주문 가능" || s === "가능" || s === "YES"
       ? "state-ok"
-      : s === "제한됨" || s === "제한"
+      : s === "제한됨" || s === "제한" || s === "—" || s === "상태 정보 부족"
         ? "state-warn"
         : "state-bad";
 
@@ -459,6 +464,7 @@ function renderPage(
       <div class="ops-line"><span class="k">미수불가 가드 통과:</span> <span class="v ${stCls(ox.fundingGateYesNo)}">${esc(ox.fundingGateYesNo)}</span></div>
       <div class="ops-line" style="grid-column: 1 / -1"><span class="k">가드 사유:</span> <span class="v">${esc(ox.fundingReasonLine)}</span></div>
     </div>
+    ${engineMirrorHtml}
   </div>
   ${warnStrip ? `<div class="warn-strip">${warnStrip}</div>` : ""}
   <div class="wrap">

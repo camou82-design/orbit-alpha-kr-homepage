@@ -18,6 +18,7 @@ import {
   type MonitorAccountSummary,
   type MonitorHoldingRow,
 } from "../infra/monitor-snapshot.js";
+import { syncEngineMirrorToLiveOpsState } from "../live/live-ops-state.js";
 import type { KiwoomAccountInfoResult, KiwoomConnectResult } from "../live/kiwoom-client.js";
 import {
   getEffectiveMarketSessionPhase,
@@ -310,6 +311,17 @@ export async function runLiveMode(logger: Logger, config: AppConfig): Promise<vo
       intent,
     },
     dryRunBlockReasons: guard.reasons,
+  });
+
+  syncEngineMirrorToLiveOpsState({
+    liveTradingEnabled: config.liveTradingEnabled,
+    liveConfirmationRequired: config.liveConfirmationRequired,
+    effectiveSessionPhase,
+    forcedSessionPhase,
+    realOrderEligible: eligibleWithFunding,
+    liveStrategyGate: config.liveTradingEnabled,
+    blockReasons: guard.reasons,
+    testBlockReasons: blockWithFunding,
   });
 
   await submitLiveTestBuyOrderOnce({

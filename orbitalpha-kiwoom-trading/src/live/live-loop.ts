@@ -66,6 +66,7 @@ import {
     recordOrderBrokerResult,
     recordSymbolFlat,
     syncDailyRealizedPnlKrw,
+    syncEngineMirrorToLiveOpsState,
 } from "./live-ops-state.js";
 
 // -----------------------------------------------------------------
@@ -278,7 +279,10 @@ async function runLiveOneTick(
     universeSymbols: string[]
 ): Promise<void> {
     const now = clockNow();
-    const { effectiveSessionPhase } = getEffectiveMarketSessionPhase(now, config.forceSessionPhase);
+    const { effectiveSessionPhase, forcedSessionPhase } = getEffectiveMarketSessionPhase(
+        now,
+        config.forceSessionPhase
+    );
     const ordersPath = getOrdersJsonlPath(config.logsDir, now);
 
     // 미실현 손익 합산 (every tick)
@@ -770,6 +774,16 @@ async function runLiveOneTick(
                 skippedBlocked: quoteSkippedBlocked,
             },
         },
+    });
+
+    syncEngineMirrorToLiveOpsState({
+        liveTradingEnabled: config.liveTradingEnabled,
+        liveConfirmationRequired: config.liveConfirmationRequired,
+        effectiveSessionPhase,
+        forcedSessionPhase,
+        liveStrategyGate: config.liveTradingEnabled,
+        blockReasons: [],
+        testBlockReasons: [],
     });
 
     logger.info("live.loop.tick", {
