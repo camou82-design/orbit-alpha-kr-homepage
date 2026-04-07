@@ -23,6 +23,34 @@ export interface LiveOpsEngineMirror {
   testBlockReasons?: string[];
 }
 
+/**
+ * 배너 fallback 및 `syncEngineMirrorToLiveOpsState`가 기록하는 `realOrderEligible`와 동일 규칙.
+ * `liveStrategyGate`가 생략된 구버전 스냅샷은 `liveTradingEnabled === true`로 간주.
+ */
+export function inferRealOrderEligibleFromEngineMirror(
+  m: Omit<LiveOpsEngineMirror, "updatedAt">
+): boolean {
+  const blockReasons = m.blockReasons ?? [];
+  const testBlockReasons = m.testBlockReasons ?? [];
+
+  const noBlocks = blockReasons.length === 0 && testBlockReasons.length === 0;
+
+  const gateOk =
+    m.liveStrategyGate === true ||
+    (m.liveStrategyGate === undefined && m.liveTradingEnabled === true);
+
+  return (
+    m.liveTradingEnabled === true &&
+    m.liveConfirmationRequired === false &&
+    m.effectiveSessionPhase === "REGULAR" &&
+    gateOk &&
+    noBlocks
+  );
+}
+
+/** `syncEngineMirrorToLiveOpsState` 입력 — `realOrderEligible`는 항상 infer로만 기록 */
+export type EngineMirrorSyncPatch = Omit<LiveOpsEngineMirror, "updatedAt" | "realOrderEligible">;
+
 export interface LiveOpsStateFile {
   schemaVersion: typeof LIVE_OPS_STATE_SCHEMA;
   updatedAt: string;
@@ -158,13 +186,13 @@ export function writeLiveOpsState(state: LiveOpsStateFile): void {
 }
 
 /** 엔진이 monitor-status와 같은 값으로 갱신 — 모니터가 구버전 JSON만 읽어도 판단 가능. */
-export function syncEngineMirrorToLiveOpsState(
-  patch: Omit<LiveOpsEngineMirror, "updatedAt">
-): LiveOpsStateFile {
+export function syncEngineMirrorToLiveOpsState(engineMirrorPatch: EngineMirrorSyncPatch): LiveOpsStateFile {
+  const realOrderEligible = inferRealOrderEligibleFromEngineMirror(engineMirrorPatch);
   const s = mutateLiveOpsState((st) => {
     st.engineMirror = {
+      ...engineMirrorPatch,
+      realOrderEligible,
       updatedAt: new Date().toISOString(),
-      ...patch,
     };
   });
   console.info("[live-ops-state] engineMirror synced", {

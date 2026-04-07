@@ -3,7 +3,10 @@
  */
 
 import type { AppConfig } from "./config.js";
-import type { LiveOpsStateFile } from "../live/live-ops-state.js";
+import {
+  inferRealOrderEligibleFromEngineMirror,
+  type LiveOpsStateFile,
+} from "../live/live-ops-state.js";
 import {
   evaluateLiveOperationalOrderGate,
   liveOpsEnvWarningsForBanner,
@@ -47,8 +50,13 @@ export function mergeMonitorDataWithEngineMirror(
     }
     if (typeof m.realOrderEligible === "boolean") {
       out.liveTestOrderEligible = m.realOrderEligible;
+    } else {
+      const inferred = inferRealOrderEligibleFromEngineMirror(m);
+      out.liveTestOrderEligible = inferred;
     }
-    if (Array.isArray(m.testBlockReasons)) {
+    if (out.liveTestOrderEligible === true) {
+      out.liveTestOrderBlockReasons = [];
+    } else if (Array.isArray(m.testBlockReasons)) {
       out.liveTestOrderBlockReasons = m.testBlockReasons;
     }
     if (Array.isArray(m.blockReasons)) {

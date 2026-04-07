@@ -318,7 +318,6 @@ export async function runLiveMode(logger: Logger, config: AppConfig): Promise<vo
     liveConfirmationRequired: config.liveConfirmationRequired,
     effectiveSessionPhase,
     forcedSessionPhase,
-    realOrderEligible: eligibleWithFunding,
     liveStrategyGate: config.liveTradingEnabled,
     blockReasons: guard.reasons,
     testBlockReasons: blockWithFunding,
