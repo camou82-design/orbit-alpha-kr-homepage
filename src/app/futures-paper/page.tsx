@@ -39,13 +39,30 @@ type Bundle = {
   configured: boolean;
   configHint: string | null;
   summary: Record<string, unknown> | null;
+  summaryRange?: Record<string, unknown> | null;
+  summaryTrend?: Record<string, unknown> | null;
   summaryWindow: Record<string, unknown> | null;
   summaryHealth: Record<string, unknown> | null;
   dashboard: Record<string, unknown> | null;
+  engineState?: Record<string, unknown> | null;
   symbolRows: Array<Record<string, unknown>>;
   healthHistoryRecent: Array<Record<string, unknown>>;
   ledgerPerformance: LedgerPerformance | null;
+  eventsRecent?: Array<Record<string, unknown>>;
 };
+
+function num(v: unknown): number | null {
+  return typeof v === "number" && Number.isFinite(v) ? v : null;
+}
+
+function topNCounts(obj: unknown, n: number): Array<{ key: string; value: number }> {
+  if (!obj || typeof obj !== "object") return [];
+  const entries = Object.entries(obj as Record<string, unknown>)
+    .filter(([, v]) => typeof v === "number" && Number.isFinite(v))
+    .map(([k, v]) => ({ key: k, value: v as number }))
+    .sort((a, b) => b.value - a.value);
+  return entries.slice(0, Math.max(0, n));
+}
 
 function ReasonBadges({ reasons }: { reasons: string[] }) {
   if (reasons.length === 0) return <span className="text-sm text-zinc-500">데이터 없음</span>;
@@ -134,6 +151,34 @@ export default function FuturesPaperPage() {
   const reasonsArr = Array.isArray(dash?.reasons) ? (dash.reasons as string[]) : [];
   const generatedMs = dash?.generatedAt ?? bundle?.summaryHealth?.generatedAt;
 
+  const engine = bundle?.engineState ?? null;
+  const curRegime = (engine?.current_regime ?? engine?.regime) as unknown;
+  const engineStatus = engine?.engine_status ?? engine?.engineStatus;
+  const riskState = engine?.risk_state ?? engine?.riskStatus;
+  const executor = engine?.active_mode_executor ?? null;
+
+  const obs = (bundle?.summary?.observation as Record<string, unknown> | undefined) ?? null;
+  const aiApproval = (obs?.aiApproval as Record<string, unknown> | undefined) ?? null;
+  const aiBlockQuality = (obs?.aiBlockQuality as Record<string, unknown> | undefined) ?? null;
+  const aiApprovalRate = aiApproval ? aiApproval.ai_approval_rate : null;
+  const aiQualityRate = aiBlockQuality ? aiBlockQuality.ai_block_quality_rate : null;
+
+  const rangeNet = bundle?.summaryRange?.totalPnlUsdNet ?? null;
+  const trendNet = bundle?.summaryTrend?.totalPnlUsdNet ?? null;
+
+  const blockedCounts = aiApproval?.blocked_reason_counts ?? null;
+  const blockedTop = topNCounts(blockedCounts, 5);
+
+  const exitMix = (obs?.exitMix as Record<string, unknown> | undefined) ?? null;
+  const exitLine = exitMix
+    ? [
+        `TP ${formatPercent(exitMix.r_EXIT_TP)}`,
+        `SL ${formatPercent(exitMix.r_EXIT_SL)}`,
+        `REGIME ${formatPercent(exitMix.r_EXIT_REGIME)}`,
+        `TREND_BREAK ${formatPercent(exitMix.r_EXIT_TREND_BREAK)}`
+      ].join(" · ")
+    : "데이터 없음";
+
   const statusCountsObj =
     trend?.statusCounts && typeof trend.statusCounts === "object" && trend.statusCounts !== null
       ? (trend.statusCounts as Record<string, unknown>)
@@ -169,6 +214,42 @@ export default function FuturesPaperPage() {
             <p className="mt-1 text-amber-200/80">{bundle?.configHint ?? "서버 환경 변수를 확인하세요."}</p>
           </div>
         )}
+
+        {/* 상단: 운영자 요약 바 */}
+        <section className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-5">
+          <h2 className="mb-4 text-xs font-semibold uppercase tracking-wider text-zinc-500">운영자 요약</h2>
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            <Stat label="현재 레짐" value={String(curRegime ?? "-")} emphasize />
+            <Stat label="엔진 상태" value={String(engineStatus ?? "-")} emphasize />
+            <Stat label="리스크 상태" value={String(riskState ?? "-")} emphasize />
+            <Stat label="실행기" value={String(executor ?? "-")} />
+            <Stat label="AI 승인율" value={formatPercent(aiApprovalRate)} valueClass="tabular-nums" />
+            <Stat label="AI 차단 품질" value={formatPercent(aiQualityRate)} valueClass="tabular-nums" />
+            <Stat label="RANGE net" value={formatCurrencyUsd(rangeNet)} valueClass="tabular-nums text-amber-100" />
+            <Stat label="TREND net" value={formatCurrencyUsd(trendNet)} valueClass="tabular-nums text-amber-100" />
+          </div>
+          <div className="mt-4 grid gap-3 lg:grid-cols-2">
+            <div className="rounded-lg border border-zinc-800 bg-zinc-950/50 p-4">
+              <p className="text-xs font-semibold uppercase tracking-wider text-zinc-500">최근 차단 사유 Top</p>
+              {blockedTop.length === 0 ? (
+                <p className="mt-2 text-sm text-zinc-500">데이터 없음</p>
+              ) : (
+                <ul className="mt-2 space-y-1.5 text-sm">
+                  {blockedTop.map((x) => (
+                    <li key={x.key} className="flex justify-between gap-3 border-b border-zinc-800/60 py-1 last:border-0">
+                      <span className="text-zinc-400">{String(x.key)}</span>
+                      <span className="font-mono tabular-nums text-zinc-100">{formatCount(x.value, "-")}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+            <div className="rounded-lg border border-zinc-800 bg-zinc-950/50 p-4">
+              <p className="text-xs font-semibold uppercase tracking-wider text-zinc-500">EXIT 타입 분포</p>
+              <p className="mt-2 text-sm text-zinc-200 tabular-nums">{exitLine}</p>
+            </div>
+          </div>
+        </section>
 
         {/* 상단: 상태 / 시각 / 손익 */}
         <section className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-5">

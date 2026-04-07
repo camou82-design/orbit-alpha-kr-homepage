@@ -14,15 +14,22 @@ function emptyBundle(configHint: string): FuturesPaperDataBundle {
     configured: false,
     configHint,
     summary: null,
+    summaryRange: null,
+    summaryTrend: null,
     summaryDaily: null,
     summaryWindow: null,
     summaryHealth: null,
     dashboard: null,
+    engineState: null,
     latestSnapshot: null,
     latestMeta: null,
     symbolRows: [],
     healthHistoryRecent: [],
-    ledgerPerformance: null
+    ledgerPerformance: null,
+    openPositions: [],
+    positionsHistory: [],
+    eventsRecent: [],
+    generatedAt: Date.now()
   };
 }
 
@@ -62,10 +69,19 @@ async function loadFromRemoteApi(baseUrl: string, secret: string): Promise<Futur
     return emptyBundle("Lightsail API response did not match the expected bundle shape.");
   }
   const b = json as FuturesPaperDataBundle;
-  if (b.ledgerPerformance === undefined) {
-    return { ...b, ledgerPerformance: null };
-  }
-  return b;
+  const withDefaults: FuturesPaperDataBundle = {
+    ...b,
+    summaryRange: (b as any).summaryRange ?? null,
+    summaryTrend: (b as any).summaryTrend ?? null,
+    engineState: (b as any).engineState ?? null,
+    ledgerPerformance: b.ledgerPerformance ?? null,
+    openPositions: Array.isArray((b as any).openPositions) ? ((b as any).openPositions as unknown[]) : [],
+    positionsHistory: Array.isArray((b as any).positionsHistory) ? ((b as any).positionsHistory as unknown[]) : [],
+    eventsRecent: Array.isArray((b as any).eventsRecent) ? ((b as any).eventsRecent as unknown[]) : [],
+    generatedAt:
+      typeof (b as any).generatedAt === "number" && Number.isFinite((b as any).generatedAt) ? ((b as any).generatedAt as number) : Date.now()
+  };
+  return withDefaults;
 }
 
 /**
