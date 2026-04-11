@@ -14,7 +14,12 @@ import {
   describeSnapshotContext,
   mapReasonLabel,
   mapSignalLabel,
-  mapStatusLabel
+  mapStatusLabel,
+  formatEntryStage,
+  formatExitStage,
+  interpretCurrentStatus,
+  interpretPerformance,
+  interpretSymbolJudgment
 } from "@/lib/futuresPaperFormat";
 
 type LedgerWindow = {
@@ -48,11 +53,26 @@ type Bundle = {
   symbolRows: Array<Record<string, unknown>>;
   healthHistoryRecent: Array<Record<string, unknown>>;
   ledgerPerformance: LedgerPerformance | null;
+  openPositions?: Array<Record<string, unknown>>;
   eventsRecent?: Array<Record<string, unknown>>;
 };
 
 function num(v: unknown): number | null {
   return typeof v === "number" && Number.isFinite(v) ? v : null;
+}
+
+function pick<T = unknown>(obj: unknown, keys: string[]): T | null {
+  if (!obj || typeof obj !== "object") return null;
+  const o = obj as Record<string, unknown>;
+  for (const k of keys) {
+    if (k in o) return o[k] as T;
+  }
+  return null;
+}
+
+function pickNum(obj: unknown, keys: string[]): number | null {
+  const v = pick(obj, keys);
+  return num(v);
 }
 
 function topNCounts(obj: unknown, n: number): Array<{ key: string; value: number }> {
@@ -112,6 +132,35 @@ function LatestStatusChain({ statuses }: { statuses: string[] }) {
   );
 }
 
+function StageProgress({ current, total, colorClass, label }: { current: number; total: number; colorClass: string; label: string }) {
+  return (
+    <div className="space-y-1.5">
+      <div className="flex justify-between text-[10px] uppercase tracking-wider text-zinc-500 font-semibold">
+        <span>{label}</span>
+        <span>{current}/{total}</span>
+      </div>
+      <div className="flex gap-1.5">
+        {Array.from({ length: total }).map((_, i) => (
+          <div
+            key={i}
+            className={`h-1.5 flex-1 rounded-full transition-colors duration-500 ${i < current ? colorClass : "bg-zinc-800"}`}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function CoreCard({ title, label, sub, color }: { title: string; label: string; sub: string; color: string }) {
+  return (
+    <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-5 ring-1 ring-zinc-800/50">
+      <p className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">{title}</p>
+      <p className={`mt-2 text-lg font-bold ${color}`}>{label}</p>
+      <p className="mt-1 text-xs leading-relaxed text-zinc-400">{sub}</p>
+    </div>
+  );
+}
+
 export default function FuturesPaperPage() {
   const [bundle, setBundle] = useState<Bundle | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -152,31 +201,37 @@ export default function FuturesPaperPage() {
   const generatedMs = dash?.generatedAt ?? bundle?.summaryHealth?.generatedAt;
 
   const engine = bundle?.engineState ?? null;
-  const curRegime = (engine?.current_regime ?? engine?.regime) as unknown;
-  const engineStatus = engine?.engine_status ?? engine?.engineStatus;
-  const riskState = engine?.risk_state ?? engine?.riskStatus;
-  const executor = engine?.active_mode_executor ?? null;
+  const curRegime = pick(engine, ["current_regime", "currentRegime", "regime"]);
+  const engineStatus = pick(engine, ["engine_status", "engineStatus"]);
+  const riskState = pick(engine, ["risk_state", "riskStatus", "risk_state_status"]);
+  const executor = pick(engine, ["active_mode_executor", "activeModeExecutor", "executor"]);
+  const isAmbiguous = !!(engine as any)?.is_ambiguous;
 
   const obs = (bundle?.summary?.observation as Record<string, unknown> | undefined) ?? null;
   const aiApproval = (obs?.aiApproval as Record<string, unknown> | undefined) ?? null;
   const aiBlockQuality = (obs?.aiBlockQuality as Record<string, unknown> | undefined) ?? null;
-  const aiApprovalRate = aiApproval ? aiApproval.ai_approval_rate : null;
-  const aiQualityRate = aiBlockQuality ? aiBlockQuality.ai_block_quality_rate : null;
+  const aiApprovalRate = pickNum(aiApproval, ["ai_approval_rate", "aiApprovalRate"]);
+  const aiQualityRate = pickNum(aiBlockQuality, ["ai_block_quality_rate", "aiBlockQualityRate"]);
 
-  const rangeNet = bundle?.summaryRange?.totalPnlUsdNet ?? null;
-  const trendNet = bundle?.summaryTrend?.totalPnlUsdNet ?? null;
+  // 일부 번들에서는 summaryRange/summaryTrend가 null일 수 있어 summary.observation.range/trend로 폴백한다.
+  const rangeNet =
+    pickNum(bundle?.summaryRange, ["totalPnlUsdNet", "total_pnl_usd_net"]) ??
+    pickNum((obs as any)?.range, ["totalPnlUsdNet", "total_pnl_usd_net"]);
+  const trendNet =
+    pickNum(bundle?.summaryTrend, ["totalPnlUsdNet", "total_pnl_usd_net"]) ??
+    pickNum((obs as any)?.trend, ["totalPnlUsdNet", "total_pnl_usd_net"]);
 
-  const blockedCounts = aiApproval?.blocked_reason_counts ?? null;
+  const blockedCounts = pick(aiApproval, ["blocked_reason_counts", "blockedReasonCounts"]);
   const blockedTop = topNCounts(blockedCounts, 5);
 
   const exitMix = (obs?.exitMix as Record<string, unknown> | undefined) ?? null;
   const exitLine = exitMix
     ? [
-        `TP ${formatPercent(exitMix.r_EXIT_TP)}`,
-        `SL ${formatPercent(exitMix.r_EXIT_SL)}`,
-        `REGIME ${formatPercent(exitMix.r_EXIT_REGIME)}`,
-        `TREND_BREAK ${formatPercent(exitMix.r_EXIT_TREND_BREAK)}`
-      ].join(" · ")
+      `TP ${formatPercent(pickNum(exitMix, ["r_EXIT_TP", "rExitTp"]))}`,
+      `SL ${formatPercent(pickNum(exitMix, ["r_EXIT_SL", "rExitSl"]))}`,
+      `REGIME ${formatPercent(pickNum(exitMix, ["r_EXIT_REGIME", "rExitRegime"]))}`,
+      `TREND_BREAK ${formatPercent(pickNum(exitMix, ["r_EXIT_TREND_BREAK", "rExitTrendBreak"]))}`
+    ].join(" · ")
     : "데이터 없음";
 
   const statusCountsObj =
@@ -185,6 +240,9 @@ export default function FuturesPaperPage() {
       : null;
 
   const latestStatusesArr = Array.isArray(trend?.latestStatuses) ? (trend.latestStatuses as string[]) : [];
+
+  const openPositions = Array.isArray(bundle?.openPositions) ? (bundle.openPositions as any[]) : [];
+  const symbolDecisions = (engine as any)?.symbol_decisions ?? null;
 
   return (
     <div className="min-h-screen bg-zinc-950 text-zinc-100">
@@ -215,91 +273,271 @@ export default function FuturesPaperPage() {
           </div>
         )}
 
-        {/* 상단: 운영자 요약 바 */}
-        <section className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-5">
-          <h2 className="mb-4 text-xs font-semibold uppercase tracking-wider text-zinc-500">운영자 요약</h2>
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-            <Stat label="현재 레짐" value={String(curRegime ?? "-")} emphasize />
-            <Stat label="엔진 상태" value={String(engineStatus ?? "-")} emphasize />
-            <Stat label="리스크 상태" value={String(riskState ?? "-")} emphasize />
-            <Stat label="실행기" value={String(executor ?? "-")} />
-            <Stat label="AI 승인율" value={formatPercent(aiApprovalRate)} valueClass="tabular-nums" />
-            <Stat label="AI 차단 품질" value={formatPercent(aiQualityRate)} valueClass="tabular-nums" />
-            <Stat label="RANGE net" value={formatCurrencyUsd(rangeNet)} valueClass="tabular-nums text-amber-100" />
-            <Stat label="TREND net" value={formatCurrencyUsd(trendNet)} valueClass="tabular-nums text-amber-100" />
+        {/* 한 줄 요약 바 */}
+        <div className="rounded-xl border border-amber-500/30 bg-amber-950/20 p-5 shadow-2xl shadow-amber-900/10 ring-1 ring-amber-500/20">
+          <p className="text-sm font-bold text-amber-100 sm:text-lg">
+            {(() => {
+              const status = interpretCurrentStatus(bundle).label;
+              if (status === "포지션 보유 중") return "🚀 현재 시장 기회를 포착하여 포지션을 보유 중입니다.";
+              if (status === "진입 대기 중") return "🔍 엔진이 정상 가동 중이며, 최적의 진입 조건을 탐색하고 있습니다.";
+              if (status === "보수적 관망 중") return "🛡️ 리스크 관리를 위해 무리한 진입을 피하고 보수적으로 시장을 살피는 중입니다.";
+              if (reasonsArr.includes("low_expected_move")) return "⚖️ 현재는 관망 구간입니다. 아직 수익 여지가 작아 진입하지 않고 있습니다.";
+              return "🛡️ 엔진은 기회를 기다리는 중이며, 조건이 맞으면 자동으로 진입을 검토합니다.";
+            })()}
+          </p>
+          <div className="mt-2 flex items-center gap-2 text-xs text-amber-200/60 sm:text-sm">
+            <span className="flex h-2 w-2 rounded-full bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.6)]" />
+            <span>최근 성과 {interpretPerformance(w7).label}({formatCurrencyUsd(w7?.totalPnlUsdNet)})를 기록 중이며, 보수적 필터를 유지하고 있습니다.</span>
           </div>
-          <div className="mt-4 grid gap-3 lg:grid-cols-2">
-            <div className="rounded-lg border border-zinc-800 bg-zinc-950/50 p-4">
-              <p className="text-xs font-semibold uppercase tracking-wider text-zinc-500">최근 차단 사유 Top</p>
-              {blockedTop.length === 0 ? (
-                <p className="mt-2 text-sm text-zinc-500">데이터 없음</p>
-              ) : (
-                <ul className="mt-2 space-y-1.5 text-sm">
-                  {blockedTop.map((x) => (
-                    <li key={x.key} className="flex justify-between gap-3 border-b border-zinc-800/60 py-1 last:border-0">
-                      <span className="text-zinc-400">{String(x.key)}</span>
-                      <span className="font-mono tabular-nums text-zinc-100">{formatCount(x.value, "-")}</span>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
-            <div className="rounded-lg border border-zinc-800 bg-zinc-950/50 p-4">
-              <p className="text-xs font-semibold uppercase tracking-wider text-zinc-500">EXIT 타입 분포</p>
-              <p className="mt-2 text-sm text-zinc-200 tabular-nums">{exitLine}</p>
-            </div>
-          </div>
-        </section>
+        </div>
 
-        {/* 상단: 상태 / 시각 / 손익 */}
-        <section className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-5">
-          <h2 className="mb-4 text-xs font-semibold uppercase tracking-wider text-zinc-500">요약 상태</h2>
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            <Stat label="운영 상태" value={mapStatusLabel(statusRaw)} emphasize />
-            <div className="sm:col-span-2 lg:col-span-1">
-              <p className="text-xs text-zinc-500">점검 사유</p>
-              <div className="mt-1">
-                <ReasonBadges reasons={reasonsArr} />
+        {/* 핵심 4개 카드 */}
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <CoreCard
+            title="현재 상태"
+            label={interpretCurrentStatus(bundle).label}
+            sub={interpretCurrentStatus(bundle).sub}
+            color="text-emerald-400"
+          />
+          <CoreCard
+            title="지금 안 들어가는 이유"
+            label={reasonsArr.length > 0 ? mapReasonLabel(reasonsArr[0]) : (curRegime === "NO_TRADE" ? "좋은 진입 자리를 기다리는 중" : "진입 신호 대기 중")}
+            sub="시장 데이터와 전략 로직을 실시간 비교 중입니다"
+            color="text-amber-400"
+          />
+          <CoreCard
+            title="최근 성과 상태"
+            label={interpretPerformance(w7).label}
+            sub={interpretPerformance(w7).sub}
+            color={interpretPerformance(w7).label === "호조" ? "text-emerald-400" : "text-rose-400"}
+          />
+          <CoreCard
+            title="엔진 동작 상태"
+            label={mapStatusLabel(engineStatus)}
+            sub={`최신 갱신: ${formatDateTimeKst(generatedMs)}`}
+            color="text-blue-400"
+          />
+        </div>
+
+        {/* 상세 분석 펼치기 (운영자 전용) */}
+        <details className="group rounded-lg border border-zinc-800 bg-zinc-900/30">
+          <summary className="flex cursor-pointer items-center justify-between p-4 text-xs font-semibold uppercase tracking-wider text-zinc-500 hover:bg-zinc-800/50">
+            <span>상세 분석 펼치기 (운영자/개발자용)</span>
+            <span className="transition-transform group-open:rotate-180">▼</span>
+          </summary>
+          <div className="space-y-6 border-t border-zinc-800 p-5">
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+              <Stat label="레짐(Regime)" value={`${String(curRegime ?? "-")}${isAmbiguous ? " (모호/인접)" : ""}`} />
+              <Stat label="실행기(Executor)" value={String(executor ?? "-")} />
+              <Stat label="위험도(Risk)" value={String(riskState ?? "-")} />
+              <Stat label="AI 승인율" value={formatPercent(aiApprovalRate)} />
+              <Stat label="AI 차단 품질" value={formatPercent(aiQualityRate)} />
+              <Stat label="레인지 손익" value={formatCurrencyUsd(rangeNet)} />
+              <Stat label="트렌드 손익" value={formatCurrencyUsd(trendNet)} />
+              <Stat label="전체 누적" value={formatCurrencyUsd(all?.totalPnlUsdNet)} />
+            </div>
+            <div className="grid gap-4 lg:grid-cols-2">
+              <div className="rounded-lg border border-zinc-800 bg-zinc-950/50 p-4">
+                <p className="text-xs font-semibold uppercase tracking-wider text-zinc-500">차단 사유 상세</p>
+                {blockedTop.length === 0 ? <p className="mt-2 text-sm text-zinc-500">대기 중</p> : (
+                  <ul className="mt-2 space-y-1 text-sm">
+                    {blockedTop.map((x) => (
+                      <li key={x.key} className="flex justify-between border-b border-zinc-800/60 py-1 last:border-0">
+                        <span className="text-zinc-400">{mapReasonLabel(String(x.key))}</span>
+                        <span className="font-mono text-zinc-100">{formatCount(x.value)}</span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+              <div className="rounded-lg border border-zinc-800 bg-zinc-950/50 p-4">
+                <p className="text-xs font-semibold uppercase tracking-wider text-zinc-500">EXIT 타입 분포</p>
+                <p className="mt-2 text-sm text-zinc-200 tabular-nums">{exitLine}</p>
               </div>
             </div>
-            <Stat label="헬스 리포트 시각 (KST)" value={formatDateTimeKst(generatedMs)} />
-            <Stat
-              label="성과 원장 집계 시각 (KST)"
-              value={formatDateTimeKst(perfBaselineMs)}
-              valueClass="text-xs text-zinc-400"
-            />
-            <Stat label="최근 7일 손익 (USD)" value={formatCurrencyUsd(w7?.totalPnlUsdNet)} valueClass="tabular-nums text-amber-100" />
-            <Stat label="최근 30일 승률" value={formatPercent(w30?.winRate)} valueClass="tabular-nums" />
-            <Stat label="전체 누적 손익 (USD)" value={formatCurrencyUsd(all?.totalPnlUsdNet)} valueClass="tabular-nums text-amber-100" />
+          </div>
+        </details>
+
+
+        {/* 보유 포지션 */}
+        <section className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-5">
+          <h2 className="mb-4 text-xs font-semibold uppercase tracking-wider text-zinc-500">진입/추가진입 진행 현황</h2>
+          <div className="grid gap-4 md:grid-cols-2">
+            {openPositions.length === 0 ? (
+              <p className="text-sm text-zinc-500">보유한 포지션이 없습니다.</p>
+            ) : (
+              openPositions.map((pos, idx) => {
+                const dec = symbolDecisions?.[pos.symbol]?.decision;
+                const guidance = dec?.guidance;
+                return (
+                  <div key={`${pos.symbol}-${idx}`} className="rounded-lg border border-zinc-800 bg-zinc-950/60 p-4">
+                    <div className="flex items-center justify-between">
+                      <div className="font-mono text-base font-semibold tracking-tight text-amber-200/90">
+                        {pos.symbol} <span className={pos.side === 'long' ? 'text-emerald-400' : 'text-rose-400'}>{pos.side.toUpperCase()}</span>
+                      </div>
+                      <div className="rounded-md bg-zinc-800 px-2 py-0.5 text-xs font-medium text-amber-200">
+                        {formatEntryStage(pos.entryStage ?? 1)}
+                      </div>
+                    </div>
+
+                    <div className="mt-4 space-y-4">
+                      {/* 단계 시각화 */}
+                      <div className="grid grid-cols-2 gap-4">
+                        <StageProgress
+                          current={pos.entryStage ?? 1}
+                          total={3}
+                          colorClass="bg-amber-400 shadow-[0_0_8px_rgba(251,191,36,0.4)]"
+                          label="진입 단계"
+                        />
+                        <StageProgress
+                          current={pos.partialExitStage ?? 0}
+                          total={3}
+                          colorClass="bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.4)]"
+                          label="익절 단계"
+                        />
+                      </div>
+
+                      <div className="grid gap-2">
+                        <div className="rounded-md bg-zinc-900 px-3 py-2.5 ring-1 ring-zinc-800">
+                          <p className="text-[10px] font-bold uppercase tracking-wider text-zinc-500">현재 가이드</p>
+                          <p className="mt-0.5 text-sm font-medium text-zinc-200">{guidance || "관망 및 신호 대기"}</p>
+                        </div>
+                        {dec?.next_action && (
+                          <div className="rounded-md bg-amber-950/20 px-3 py-2.5 ring-1 ring-amber-900/40">
+                            <p className="text-[10px] font-bold uppercase tracking-wider text-amber-500/80">다음 예상 행동</p>
+                            <p className="mt-0.5 text-sm font-bold text-amber-200">{dec.next_action}</p>
+                          </div>
+                        )}
+                        {dec?.invalidate_condition && (
+                          <div className="rounded-md bg-red-950/10 px-3 py-2 ring-1 ring-red-900/20">
+                            <p className="text-[10px] font-bold uppercase tracking-wider text-red-500/60">무효화 조건</p>
+                            <p className="mt-0.5 text-xs text-red-300/80">{dec.invalidate_condition}</p>
+                          </div>
+                        )}
+                      </div>
+
+                      <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 text-sm">
+                        <dt className="text-zinc-500">평균 매수단가</dt>
+                        <dd className="tabular-nums text-zinc-100">{formatPrice(pos.entryPrice)}</dd>
+
+                        <dt className="text-zinc-500">현재가 (Mark)</dt>
+                        <dd className="tabular-nums text-amber-200/90 font-mono italic">{formatPrice(dec?.mark || bundle?.symbolRows?.find(r => r.symbol === pos.symbol)?.lastPrice)}</dd>
+
+                        <dt className="text-zinc-500">현재 총 비중</dt>
+                        <dd className="tabular-nums text-zinc-100 font-bold">{formatCurrencyUsd(pos.sizeUsd)}</dd>
+
+                        <dt className="text-zinc-500">미실현 수익</dt>
+                        <dd className="flex items-center gap-2">
+                          <span className={`tabular-nums font-bold ${(pos.unrealizedPnl ?? 0) >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                            {formatCurrencyUsd(pos.unrealizedPnl ?? 0)}
+                          </span>
+                          <span className={`text-[10px] font-mono px-1 rounded ${(pos.unrealizedPnlPct ?? 0) >= 0 ? 'bg-emerald-950/30 text-emerald-400' : 'bg-rose-950/30 text-rose-400'}`}>
+                            {formatPercent(pos.unrealizedPnlPct ?? 0)}
+                          </span>
+                        </dd>
+
+                        {pos.realizedPnl !== undefined && pos.realizedPnl !== 0 && (
+                          <>
+                            <dt className="text-zinc-500">누적 실현 수익</dt>
+                            <dd className={`tabular-nums font-bold ${pos.realizedPnl > 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                              {formatCurrencyUsd(pos.realizedPnl)}
+                            </dd>
+                          </>
+                        )}
+
+                        <div className="col-span-2 my-1 border-t border-zinc-900" />
+
+                        <dt className="text-zinc-500">손절가 (Stop)</dt>
+                        <dd className="tabular-nums text-rose-400 font-bold">{formatPrice(pos.stopPrice || dec?.stop_price)}</dd>
+
+                        {pos.targetPrices && Array.isArray(pos.targetPrices) && pos.targetPrices.length > 0 && (
+                          <>
+                            <dt className="text-zinc-500">목표가 (Targets)</dt>
+                            <dd className="space-x-2 tabular-nums text-emerald-400 text-xs font-mono">
+                              {pos.targetPrices.map((t: number, i: number) => (
+                                <span key={i} className={i < (pos.partialExitStage ?? 0) ? "line-through opacity-40" : ""}>
+                                  {formatPrice(t)}
+                                </span>
+                              ))}
+                            </dd>
+                          </>
+                        )}
+
+                        <dt className="text-zinc-500">최초 진입</dt>
+                        <dd className="text-xs text-zinc-400">{formatDateTimeKst(pos.openedAt)}</dd>
+                      </dl>
+                    </div>
+                  </div>
+                );
+              })
+            )}
           </div>
         </section>
 
-        {/* 심볼 */}
-        <section className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-5">
-          <h2 className="mb-4 text-xs font-semibold uppercase tracking-wider text-zinc-500">심볼</h2>
+        {/* 종목별 판단 */}
+        <section className="space-y-4">
+          <h2 className="text-xs font-semibold uppercase tracking-wider text-zinc-500">종목별 실시간 판단</h2>
           <div className="grid gap-4 sm:grid-cols-2">
             {(bundle?.symbolRows?.length ?? 0) === 0 ? (
-              <p className="text-sm text-zinc-500">데이터 없음</p>
+              <p className="text-sm text-zinc-500">데이터를 불러올 수 없습니다.</p>
             ) : (
-              bundle!.symbolRows!.map((row) => (
-                <div key={String(row.symbol)} className="rounded-lg border border-zinc-800 bg-zinc-950/60 p-4">
-                  <div className="font-mono text-base font-semibold tracking-tight text-amber-200/90">
-                    {String(row.symbol)}
+              bundle!.symbolRows!.map((row) => {
+                const judgment = interpretSymbolJudgment(row);
+                return (
+                  <div key={String(row.symbol)} className="rounded-xl border border-zinc-800 bg-zinc-900/40 p-5">
+                    <div className="flex items-center justify-between">
+                      <div className="font-mono text-lg font-bold text-amber-200">{String(row.symbol)}</div>
+                      <div className={`rounded-full px-2 py-0.5 text-[10px] font-bold ring-1 ${row.signal === "none" ? "bg-zinc-800 text-zinc-500 ring-zinc-700" : "bg-emerald-950/30 text-emerald-400 ring-emerald-500/50"}`}>
+                        {mapSignalLabel(row.signal)}
+                      </div>
+                    </div>
+
+                    <div className="mt-4 grid gap-4">
+                      <div className="space-y-1">
+                        <p className="text-[10px] font-bold uppercase tracking-wider text-zinc-500">현재 판단</p>
+                        <p className="text-sm font-bold text-zinc-100">{judgment.label}</p>
+                        <p className="text-xs text-zinc-400">{judgment.sub}</p>
+                        {(() => {
+                          const dec = (symbolDecisions as any)?.[row.symbol]?.decision;
+                          const suppl = Array.isArray(dec?.supplemental_reasons) ? dec.supplemental_reasons : [];
+                          if (suppl.length === 0) return null;
+                          return (
+                            <div className="mt-2 flex flex-wrap gap-1">
+                              {suppl.map((r: string) => (
+                                <span key={r} className="rounded bg-zinc-800/80 px-1.5 py-0.5 text-[9px] text-zinc-500 ring-1 ring-zinc-800">
+                                  {mapReasonLabel(r)}
+                                </span>
+                              ))}
+                            </div>
+                          );
+                        })()}
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-4 border-t border-zinc-800 pt-3">
+                        <div>
+                          <p className="text-[10px] font-bold uppercase tracking-wider text-zinc-500">방향 감지</p>
+                          <p className="mt-0.5 text-xs font-medium text-zinc-200">{describeSnapshotContext(row)}</p>
+                        </div>
+                        <div>
+                          <p className="text-[10px] font-bold uppercase tracking-wider text-zinc-500">진입 가능성</p>
+                          <p className="mt-0.5 text-xs font-bold text-amber-400">{judgment.probability}</p>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center justify-between rounded-lg bg-zinc-950/40 p-3">
+                        <div>
+                          <p className="text-[10px] font-medium text-zinc-500">현재 가격</p>
+                          <p className="font-mono text-sm font-bold text-zinc-300">{formatPrice(row.lastPrice)}</p>
+                        </div>
+                        <div className="text-right">
+                          <p className="text-[10px] font-medium text-zinc-500">마지막 업데이트</p>
+                          <p className="text-[10px] text-zinc-500">{formatDateTimeKst(row.fetchedAt)}</p>
+                        </div>
+                      </div>
+                    </div>
                   </div>
-                  <dl className="mt-3 grid grid-cols-[auto_1fr] gap-x-3 gap-y-2 text-sm">
-                    <dt className="text-zinc-500">시그널</dt>
-                    <dd className="text-zinc-100">{mapSignalLabel(row.signal)}</dd>
-                    <dt className="text-zinc-500">맥락</dt>
-                    <dd className="text-zinc-100">{describeSnapshotContext(row)}</dd>
-                    <dt className="text-zinc-500">최근 가격</dt>
-                    <dd className="tabular-nums text-zinc-100">{formatPrice(row.lastPrice)}</dd>
-                    <dt className="text-zinc-500">펀딩 비율</dt>
-                    <dd className="font-mono text-xs tabular-nums text-zinc-300">{formatRateRaw(row.fundingRate)}</dd>
-                    <dt className="text-zinc-500">데이터 시각 (KST)</dt>
-                    <dd className="break-all text-xs text-zinc-300">{formatDateTimeKst(row.fetchedAt)}</dd>
-                  </dl>
-                </div>
-              ))
+                );
+              })
             )}
           </div>
         </section>
@@ -425,35 +663,49 @@ function MiniBlock({ title, slice }: { title: string; slice: unknown }) {
   const trades = ledger?.totalTrades ?? (slice as Record<string, unknown> | null)?.totalTrades;
   const wr = ledger?.winRate ?? (slice as Record<string, unknown> | null)?.winRate;
   const pnl = ledger?.totalPnlUsdNet ?? (slice as Record<string, unknown> | null)?.totalPnlUsdNet;
+  const interpretation = interpretPerformance(slice);
+
   return (
-    <div className="rounded-lg border border-zinc-800 bg-zinc-950/50 p-4">
-      <p className="text-xs font-medium text-zinc-500">{title}</p>
-      <p className="mt-2 text-sm text-zinc-300">
-        거래 수 <span className="ml-1 tabular-nums text-zinc-100">{formatCount(trades)}</span>
-      </p>
-      <p className="text-sm text-zinc-300">
-        승률 <span className="ml-1 tabular-nums text-zinc-100">{formatPercent(wr)}</span>
-      </p>
-      <p className="mt-1 text-sm text-zinc-300">
-        순손익 (net){" "}
-        <span className="ml-1 tabular-nums font-medium text-amber-100/95">{formatCurrencyUsd(pnl)}</span>
-      </p>
-      {ledger ? (
-        <dl className="mt-3 space-y-1 border-t border-zinc-800/80 pt-2 text-xs text-zinc-500">
-          <div className="flex justify-between gap-2">
-            <dt>gross</dt>
-            <dd className="font-mono tabular-nums text-zinc-400">{formatCurrencyUsd(ledger.totalPnlUsdGross)}</dd>
-          </div>
-          <div className="flex justify-between gap-2">
-            <dt>fee</dt>
-            <dd className="font-mono tabular-nums text-zinc-400">{formatCurrencyUsd(ledger.totalFeeUsd)}</dd>
-          </div>
-          <div className="flex justify-between gap-2">
-            <dt>funding</dt>
-            <dd className="font-mono tabular-nums text-zinc-400">{formatCurrencyUsd(ledger.totalFundingUsd)}</dd>
-          </div>
-        </dl>
-      ) : null}
+    <div className="rounded-xl border border-zinc-800 bg-zinc-950/50 p-5 hover:bg-zinc-900/60 transition-colors">
+      <p className="text-[10px] font-bold uppercase tracking-wider text-zinc-500">{title}</p>
+
+      <div className="mt-3 space-y-1">
+        <p className={`text-sm font-bold ${interpretation.label === "호조" ? "text-emerald-400" : interpretation.label === "부진" ? "text-rose-400" : "text-zinc-300"}`}>
+          {interpretation.label}
+        </p>
+        <p className="text-[10px] text-zinc-500 leading-tight">{interpretation.sub}</p>
+      </div>
+
+      <div className="mt-4 flex items-end justify-between">
+        <div>
+          <p className="text-[10px] text-zinc-500">순손익 (Net)</p>
+          <p className="font-mono text-base font-bold text-amber-100">{formatCurrencyUsd(pnl)}</p>
+        </div>
+        <div className="text-right">
+          <p className="text-[10px] text-zinc-500">승률</p>
+          <p className="font-mono text-sm font-semibold text-zinc-300">{formatPercent(wr)}</p>
+        </div>
+      </div>
+
+      {ledger && (
+        <details className="mt-4">
+          <summary className="cursor-pointer text-[10px] text-zinc-600 hover:text-zinc-400">상세 수수료/비용 보기</summary>
+          <dl className="mt-2 space-y-1 text-[10px] text-zinc-500 border-t border-zinc-800/50 pt-2">
+            <div className="flex justify-between">
+              <dt>총 거래</dt>
+              <dd className="font-mono tabular-nums">{formatCount(trades)}건</dd>
+            </div>
+            <div className="flex justify-between">
+              <dt>수수료 합계</dt>
+              <dd className="font-mono tabular-nums text-rose-400/80">{formatCurrencyUsd(ledger.totalFeeUsd)}</dd>
+            </div>
+            <div className="flex justify-between">
+              <dt>펀딩 합계</dt>
+              <dd className="font-mono tabular-nums text-zinc-400">{formatCurrencyUsd(ledger.totalFundingUsd)}</dd>
+            </div>
+          </dl>
+        </details>
+      )}
     </div>
   );
 }
