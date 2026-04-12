@@ -588,24 +588,33 @@ export default function FuturesPaperPage() {
   const [bundle, setBundle] = useState<Bundle | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+
+  const refreshData = async (isInitial = false) => {
+    if (!isInitial) setIsRefreshing(true);
+    try {
+      // Use timestamp to bust any potential caches
+      const res = await fetch(`/api/futures-paper/data?t=${Date.now()}`, { cache: "no-store" });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const j = (await res.json()) as Bundle;
+      setBundle(j);
+      setLastUpdated(new Date());
+      setErr(null); // Clear previous error if successful
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      if (isInitial) setLoading(false);
+      setIsRefreshing(false);
+    }
+  };
 
   useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const res = await fetch("/api/futures-paper/data", { cache: "no-store" });
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const j = (await res.json()) as Bundle;
-        if (!cancelled) setBundle(j);
-      } catch (e) {
-        if (!cancelled) setErr(e instanceof Error ? e.message : String(e));
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
+    refreshData(true);
+    const interval = setInterval(() => {
+      refreshData();
+    }, 5000);
+    return () => clearInterval(interval);
   }, []);
 
   const dash = bundle?.dashboard ?? null;
@@ -672,21 +681,44 @@ export default function FuturesPaperPage() {
     <div className="min-h-screen bg-zinc-950 text-zinc-100">
       <header className="border-b border-zinc-800 bg-zinc-900/80 px-4 py-3">
         <div className="mx-auto flex max-w-5xl flex-wrap items-center justify-between gap-2">
-          <div>
-            <h1 className="text-lg font-semibold tracking-tight">선물 페이퍼 모니터</h1>
-            <p className="text-xs text-zinc-500">Bybit USDT · 모의 · 읽기 전용</p>
+          <div className="flex items-center gap-4">
+            <div>
+              <h1 className="text-lg font-semibold tracking-tight">선물 페이퍼 모니터</h1>
+              <p className="text-xs text-zinc-500">Bybit USDT · 모의 · 읽기 전용</p>
+            </div>
+            {lastUpdated && (
+              <div className="hidden border-l border-zinc-700 pl-4 sm:block">
+                <p className="text-[10px] font-medium uppercase tracking-wider text-zinc-500">마지막 갱신</p>
+                <p className="text-[10px] text-zinc-400">
+                  {lastUpdated.toLocaleTimeString("ko-KR")}
+                  {isRefreshing && <span className="ml-2 animate-pulse text-amber-400">갱신 중...</span>}
+                </p>
+              </div>
+            )}
           </div>
-          <Link href="/" className="text-sm text-amber-400/90 hover:text-amber-300">
-            ← orbitalpha.kr
-          </Link>
+          <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2 rounded-full bg-zinc-800/50 px-3 py-1 ring-1 ring-zinc-700/50">
+              <div className={`h-1.5 w-1.5 rounded-full ${isRefreshing ? "animate-ping bg-amber-400" : "bg-emerald-500"}`} />
+              <span className="text-[10px] font-bold text-zinc-400">AUTO: 5s</span>
+            </div>
+            <Link href="/" className="text-sm text-amber-400/90 hover:text-amber-300">
+              ← orbitalpha.kr
+            </Link>
+          </div>
         </div>
       </header>
 
       <main className="mx-auto max-w-5xl space-y-6 px-4 py-6">
         {loading && <p className="text-sm text-zinc-400">불러오는 중…</p>}
         {err && (
-          <div className="rounded border border-red-900/60 bg-red-950/40 px-3 py-2 text-sm text-red-200">
-            {err}
+          <div className="flex items-center justify-between rounded border border-red-900/60 bg-red-950/40 px-3 py-2 text-sm text-red-200">
+            <span>{err}</span>
+            <button
+              onClick={() => refreshData(true)}
+              className="rounded bg-red-900/40 px-2 py-0.5 text-[10px] font-bold hover:bg-red-800/60"
+            >
+              재시도
+            </button>
           </div>
         )}
 
