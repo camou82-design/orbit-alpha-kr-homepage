@@ -195,8 +195,8 @@ function aggregatePortfolioMetricsFromBundle(bundle: Bundle) {
   const symDec =
     eng && typeof eng === "object"
       ? ((eng as Record<string, unknown>).symbol_decisions as
-          | Record<string, { decision?: Record<string, unknown> }>
-          | undefined)
+        | Record<string, { decision?: Record<string, unknown> }>
+        | undefined)
       : undefined;
   let totalUnreal = 0;
   for (const o of opens) {
@@ -728,15 +728,18 @@ export default function FuturesPaperPage() {
           <div className="grid gap-4 sm:grid-cols-2">
             {!bundle?.configured ? (
               <p className="text-sm text-zinc-500">데이터 경로가 설정되면 표시됩니다.</p>
+            ) : pm.openCount > 0 ? (
+              openPositions.map((o) => {
+                const pos = o as Record<string, unknown>;
+                const sym = String(pos.symbol ?? "");
+                const row = bundle.symbolRows?.find((r) => String(r.symbol) === sym);
+                return (
+                  <PositionMoneyCard key={sym} pos={pos} row={row} symbolDecisions={symbolDecisions} />
+                );
+              })
             ) : (
               SYMBOL_ORDER.map((sym) => {
-                const pos = openPositions.find((p) => String(p.symbol) === sym) as Record<string, unknown> | undefined;
                 const row = bundle.symbolRows?.find((r) => String(r.symbol) === sym);
-                if (pos) {
-                  return (
-                    <PositionMoneyCard key={sym} pos={pos} row={row} symbolDecisions={symbolDecisions} />
-                  );
-                }
                 if (row) {
                   return <SymbolJudgmentCard key={sym} row={row} symbolDecisions={symbolDecisions} />;
                 }
