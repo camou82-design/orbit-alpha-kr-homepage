@@ -13,7 +13,7 @@ export function isDisplayEmpty(value: unknown): boolean {
 }
 
 /** Missing data vs valid zero: 0 shows as "0". */
-export function formatEmpty(value: unknown, emptyLabel = "데이터 없음"): string {
+export function formatEmpty(value: unknown, emptyLabel = "기록 없음"): string {
   if (isDisplayEmpty(value)) return emptyLabel;
   if (typeof value === "number" && value === 0) return "0";
   if (typeof value === "boolean") return value ? "예" : "아니오";
@@ -21,7 +21,7 @@ export function formatEmpty(value: unknown, emptyLabel = "데이터 없음"): st
 }
 
 /** Integer-like counts (trades): 0 is valid. */
-export function formatCount(value: unknown, emptyLabel = "데이터 없음"): string {
+export function formatCount(value: unknown, emptyLabel = "기록 없음"): string {
   if (value === null || value === undefined) return emptyLabel;
   if (typeof value === "number" && !Number.isFinite(value)) return emptyLabel;
   if (typeof value === "number" && Number.isInteger(value)) return value.toLocaleString("ko-KR");
@@ -32,7 +32,7 @@ export function formatCount(value: unknown, emptyLabel = "데이터 없음"): st
 }
 
 /** USD 손익/금액: 천단위, 소수 최대 4자리. */
-export function formatCurrencyUsd(value: unknown, emptyLabel = "데이터 없음"): string {
+export function formatCurrencyUsd(value: unknown, emptyLabel = "기록 없음"): string {
   if (isDisplayEmpty(value)) return emptyLabel;
   const n = typeof value === "number" ? value : Number(value);
   if (!Number.isFinite(n)) return emptyLabel;
@@ -44,7 +44,7 @@ export function formatCurrencyUsd(value: unknown, emptyLabel = "데이터 없음
 /**
  * 승률: 0~1 비율 → 퍼센트. 이미 0~100 형태면 그대로 %만 붙임(휴리스틱).
  */
-export function formatPercent(value: unknown, emptyLabel = "데이터 없음"): string {
+export function formatPercent(value: unknown, emptyLabel = "기록 없음"): string {
   if (isDisplayEmpty(value)) return emptyLabel;
   const n = typeof value === "number" ? value : Number(value);
   if (!Number.isFinite(n)) return emptyLabel;
@@ -56,7 +56,7 @@ export function formatPercent(value: unknown, emptyLabel = "데이터 없음"): 
 }
 
 /** 펀딩 등 작은 비율(원시 rate) 표시용 */
-export function formatRateRaw(value: unknown, emptyLabel = "데이터 없음"): string {
+export function formatRateRaw(value: unknown, emptyLabel = "기록 없음"): string {
   if (isDisplayEmpty(value)) return emptyLabel;
   const n = typeof value === "number" ? value : Number(value);
   if (!Number.isFinite(n)) return emptyLabel;
@@ -64,7 +64,7 @@ export function formatRateRaw(value: unknown, emptyLabel = "데이터 없음"): 
 }
 
 /** 가격 등 큰 숫자 */
-export function formatPrice(value: unknown, emptyLabel = "데이터 없음"): string {
+export function formatPrice(value: unknown, emptyLabel = "기록 없음"): string {
   if (isDisplayEmpty(value)) return emptyLabel;
   const n = typeof value === "number" ? value : Number(value);
   if (!Number.isFinite(n)) return emptyLabel;
@@ -72,7 +72,7 @@ export function formatPrice(value: unknown, emptyLabel = "데이터 없음"): st
 }
 
 /** KST, `YYYY-MM-DD HH:mm:ss` 형태 (sv-SE + timeZone). */
-export function formatDateTimeKst(ms: unknown, emptyLabel = "데이터 없음"): string {
+export function formatDateTimeKst(ms: unknown, emptyLabel = "기록 없음"): string {
   if (typeof ms !== "number" || !Number.isFinite(ms)) return emptyLabel;
   try {
     const s = new Date(ms).toLocaleString("sv-SE", { timeZone: KST_TZ });
@@ -88,7 +88,7 @@ const STATUS_LABELS: Record<string, string> = {
 };
 
 export function mapStatusLabel(status: unknown): string {
-  if (typeof status !== "string" || !status) return "데이터 없음";
+  if (typeof status !== "string" || !status) return "기록 없음";
   const s = status.toUpperCase();
   if (s === "RUNNING") return "정상 실행 중";
   if (s === "PAUSED") return "일시 정지(리스크)";
@@ -108,6 +108,10 @@ const REASON_LABELS: Record<string, string> = {
 };
 
 export function mapReasonLabel(key: string): string {
+  if (key.startsWith("EXIT_") || key.includes("_EXIT")) {
+    const { label, desc } = formatExitReason(key);
+    return `${label}: ${desc}`;
+  }
   if (key === "low_expected_move") return "움직임이 작아 수익 여지가 부족함";
   if (key === "no_trade_regime") return "시장 방향이 뚜렷하지 않아 관망 중";
   if (key === "insufficient_data" || key.includes("insufficient_")) return "판단에 필요한 최근 데이터가 아직 부족함";
@@ -118,6 +122,7 @@ export function mapReasonLabel(key: string): string {
   if (key === "EDGE_FAIL_FEE") return "수수료 대비 기대 수익 부족";
   if (key === "AI_REJECT") return "AI 판단 거절";
   if (key === "RISK_LOCK") return "리스크 상한 도달";
+  if (key.includes("crash_risk_")) return `급락 방어 개입 (${key.replace("crash_risk_", "").toUpperCase()})`;
   return REASON_LABELS[key] ?? key;
 }
 
@@ -130,7 +135,7 @@ const SIGNAL_LABELS: Record<string, string> = {
 };
 
 export function mapSignalLabel(signal: unknown): string {
-  if (typeof signal !== "string" || !signal) return "데이터 없음";
+  if (typeof signal !== "string" || !signal) return "기록 없음";
   const s = signal.toLowerCase();
   if (s === "none" || s === "") return "관망 중";
   if (s === "paper_long_candidate") return "상승 후보 감지";
@@ -138,6 +143,52 @@ export function mapSignalLabel(signal: unknown): string {
   if (s === "neutral") return "중립";
   if (s === "strong") return "강세";
   return SIGNAL_LABELS[signal] ?? signal;
+}
+
+/** [NEW] 종료 사유 코드별 표시명 및 설명 사전 */
+const EXIT_REASON_MAP: Record<string, { label: string; desc: string }> = {
+  EXIT_SL: { label: "손절", desc: "손실 제한 기준 도달" },
+  EXIT_TP: { label: "익절", desc: "목표 수익 구간 도달" },
+  EXIT_TP_1: { label: "1차 익절", desc: "1차 수익 목표 도달 및 비중 축소" },
+  EXIT_TP_2: { label: "2차 익절", desc: "2차 수익 목표 도달 및 비중 축소" },
+  EXIT_PARTIAL_TP: { label: "부분 익절", desc: "수익 분할 확보 완료" },
+  EXIT_TP_PARTIAL: { label: "부분 익절", desc: "수익 분할 확보 완료" },
+  EXIT_TRAILING: { label: "트레일링 익절", desc: "수익 보존을 위한 트레일링 스탑 도달" },
+  EXIT_TIME: { label: "시간 종료", desc: "최대 보유 시간 초과" },
+  EXIT_TIME_STOP: { label: "시간 종료", desc: "최대 보유 시간 초과" },
+  EXIT_TREND_BREAK: { label: "추세 이탈", desc: "진입 당시 추세 조건이 훼손됨" },
+  EXIT_REGIME: { label: "장세 전환 종료", desc: "시장 상태 판단이 바뀌어 기존 포지션 종료" },
+  EXIT_REGIME_EXIT: { label: "장세 전환 종료", desc: "시장 상태 판단이 바뀌어 기존 포지션 종료" },
+  EXIT_REGIME_BREAK: { label: "장세 전환 종료", desc: "구조적 시장 상태 변화 감지" },
+  EXIT_RANGE_REBALANCE: { label: "횡보 재조정 종료", desc: "횡보 구간 재균형 판단으로 기존 포지션 정리" },
+  EXIT_STRUCTURAL: { label: "구조 훼손 종료", desc: "시장 구조 훼손(박스 이탈 등)으로 인한 종료" },
+  EXIT_RISK: { label: "위험 관리 종료", desc: "위험 제어(변동성 급증 등)를 위한 대응 종료" },
+  EXIT_SWITCH: { label: "전략 전환 종료", desc: "반대 신호 발생으로 인한 포지션 스위칭" },
+  EXIT_TREND_SWITCH: { label: "전략 전환 종료", desc: "추세 반전 판단에 따른 스위칭" },
+  EXIT_SIGNAL_LOST: { label: "진입 근거 약화", desc: "진입 당시 신호 근거가 소멸함" },
+  EXIT_CRASH_FORCE: { label: "급락 강제 청산", desc: "시장 급락 감지로 인한 안전 선제 청산" },
+  EXIT_CRASH_REDUCE: { label: "급락 비중 축소", desc: "하락 압력 가중으로 인한 포지션 50% 축소" },
+  EXIT_LONG_CRASH_FORCE: { label: "급락 롱 강제 종료", desc: "롱 포지션 보호를 위한 급락 강제 청산" },
+  EXIT_LONG_CRASH_REDUCE: { label: "급락 롱 비중 축소", desc: "롱 포지션 위험 관리를 위한 50% 선제 축소" },
+  EXIT_SHORT_MOMENTUM_TRAIL: { label: "급락 숏 수익 보호", desc: "급락 모멘텀을 수익 기회로 활용하며 트레일링 보호" },
+  EXIT_UNKNOWN: { label: "기록 부족", desc: "명확한 종료 사유 기록 없음" },
+};
+
+/** [NEW] 종료 사유 포맷팅 */
+export function formatExitReason(code: unknown): { label: string; desc: string; code: string } {
+  const c = String(code || "EXIT_UNKNOWN").toUpperCase();
+  const entry = EXIT_REASON_MAP[c];
+
+  if (entry) {
+    return { ...entry, code: c };
+  }
+
+  // 하위 호환 / 기타 코드 처리
+  if (c.includes("TP")) return { label: "익절", desc: "목표 수익 도달", code: c };
+  if (c.includes("SL")) return { label: "손절", desc: "손실 제한 도달", code: c };
+  if (c.includes("TIME")) return { label: "시간 종료", desc: "보유 시간 경과", code: c };
+
+  return { label: "종료", desc: "포지션 정리됨", code: c };
 }
 
 /**
@@ -253,4 +304,39 @@ export function interpretSymbolJudgment(row: any): { label: string; sub: string;
   }
 
   return { label: "대기", sub: "아직 진입 조건이 충분하지 않습니다", probability: "낮음" };
+}
+/**
+ * [NEW] 자산 및 성과 계산 상수
+ */
+export const INITIAL_CAPITAL_KRW = 450000;
+export const USDKRW_RATE = 1350;
+export const INITIAL_CAPITAL_USD = INITIAL_CAPITAL_KRW / USDKRW_RATE;
+
+/**
+ * [NEW] 거래 이력 기반 자산 및 성과 통합 계산
+ * Σ(pnlUsdNet)을 초기 자본에 합산하여 현재 자산을 계산합니다.
+ */
+export function computeLedgerPerformanceFromHistory(history: any[]) {
+  const trades = Array.isArray(history) ? history : [];
+
+  // 비용(수수료, 슬리피지, 펀딩)이 모두 반영된 pnlUsdNet 합계
+  const totalRealizedPnlUsd = trades.reduce((acc, t) => {
+    const net = typeof t.pnlUsdNet === 'number' ? t.pnlUsdNet : 0;
+    return acc + net;
+  }, 0);
+
+  const currentCapitalUsd = INITIAL_CAPITAL_USD + totalRealizedPnlUsd;
+  const currentCapitalKrw = currentCapitalUsd * USDKRW_RATE;
+
+  const roiPct = (totalRealizedPnlUsd / INITIAL_CAPITAL_USD) * 100;
+
+  return {
+    initialCapitalUsd: INITIAL_CAPITAL_USD,
+    initialCapitalKrw: INITIAL_CAPITAL_KRW,
+    currentCapitalUsd,
+    currentCapitalKrw,
+    totalRealizedPnlUsd,
+    roiPct,
+    tradeCount: trades.length
+  };
 }

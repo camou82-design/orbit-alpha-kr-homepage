@@ -15,6 +15,11 @@ import {
   mapSignalLabel,
   mapStatusLabel,
   interpretPerformance,
+  formatExitReason,
+  computeLedgerPerformanceFromHistory,
+  INITIAL_CAPITAL_KRW,
+  USDKRW_RATE,
+  INITIAL_CAPITAL_USD
 } from "@/lib/futuresPaperFormat";
 
 /** Types */
@@ -156,7 +161,7 @@ function unrealizedUsdResolved(n: NormPos, mark: number | null): number | null {
   return Number.isFinite(gross) ? gross : null;
 }
 
-function formatSignedUsdDisplay(v: number | null, empty = "N/A"): string {
+function formatSignedUsdDisplay(v: number | null, empty = "기록 없음"): string {
   if (v === null || !Number.isFinite(v)) return empty;
   const sign = v > 0 ? "+" : v < 0 ? "−" : "";
   const body = formatCurrencyUsd(Math.abs(v), empty);
@@ -165,17 +170,17 @@ function formatSignedUsdDisplay(v: number | null, empty = "N/A"): string {
 }
 
 function formatPctOnMargin(pnlUsd: number | null, marginUsd: number | null): string {
-  if (pnlUsd === null || !Number.isFinite(pnlUsd)) return "N/A";
-  if (marginUsd === null || !Number.isFinite(marginUsd) || marginUsd <= 0) return "N/A";
+  if (pnlUsd === null || !Number.isFinite(pnlUsd)) return "기록 없음";
+  if (marginUsd === null || !Number.isFinite(marginUsd) || marginUsd <= 0) return "기록 없음";
   const pct = (pnlUsd / marginUsd) * 100;
   const sign = pct > 0 ? "+" : pct < 0 ? "−" : "";
   return sign + Math.abs(pct).toLocaleString("ko-KR", { maximumFractionDigits: 2 }) + "%";
 }
 
 function formatHoldShort(openedAtMs: number | null): string {
-  if (openedAtMs === null || !Number.isFinite(openedAtMs)) return "N/A";
+  if (openedAtMs === null || !Number.isFinite(openedAtMs)) return "기록 없음";
   const ms = Date.now() - openedAtMs;
-  if (ms < 0) return "N/A";
+  if (ms < 0) return "기록 없음";
   const s = Math.floor(ms / 1000);
   const m = Math.floor(s / 60);
   const h = Math.floor(m / 60);
@@ -212,9 +217,7 @@ function aggregatePortfolioMetricsFromBundle(bundle: Bundle) {
 const SYMBOL_ORDER = ["BTCUSDT", "ETHUSDT"];
 
 /** UI Constants & Exchange Logic */
-const DISPLAY_CAPITAL_KRW = 450000;
-const USDKRW_RATE = 1350; // Fixed rate for UI feedback
-const DISPLAY_CAPITAL_USDT = DISPLAY_CAPITAL_KRW / USDKRW_RATE;
+// Moved to futuresPaperFormat.ts
 
 function formatKrw(v: number): string {
   return "₩" + v.toLocaleString("ko-KR");
@@ -252,14 +255,16 @@ function HeroMetric({
 function AccountOverviewSection({
   pm,
   perf,
-  usdkrwRate
+  usdkrwRate,
+  ledger
 }: {
   pm: { openCount: number, totalUnreal: number },
   perf: LedgerPerformance | null,
-  usdkrwRate: number
+  usdkrwRate: number,
+  ledger: any
 }) {
-  const totalAssetsKrw = DISPLAY_CAPITAL_KRW;
-  const totalAssetsUsdt = DISPLAY_CAPITAL_USDT;
+  const totalAssetsKrw = ledger.currentCapitalKrw;
+  const totalAssetsUsdt = ledger.currentCapitalUsd;
   const unrealUsdt = pm.totalUnreal;
   const unrealKrw = unrealUsdt * usdkrwRate;
 
@@ -271,7 +276,7 @@ function AccountOverviewSection({
       <h2 className="text-xs font-bold uppercase tracking-widest text-zinc-500">계좌 개요 (Account Overview)</h2>
       <div className="grid gap-4 md:grid-cols-3">
         <div className="rounded-xl border border-zinc-800 bg-zinc-900/40 p-5 shadow-sm">
-          <p className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">총 운용 자산</p>
+          <p className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">현재 자산 (Current)</p>
           <div className="mt-2 flex items-baseline gap-2">
             <span className="text-2xl font-black text-zinc-100">{formatKrw(totalAssetsKrw)}</span>
             <span className="text-sm font-medium text-zinc-400">≈ {formatCurrencyUsd(totalAssetsUsdt)}</span>
@@ -280,22 +285,22 @@ function AccountOverviewSection({
         </div>
 
         <div className="rounded-xl border border-zinc-800 bg-zinc-900/40 p-5 shadow-sm">
-          <p className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">미실현 손익</p>
+          <p className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">초기 자산 (Initial)</p>
           <div className="mt-2 flex items-baseline gap-2">
-            <span className={`text-2xl font-black ${unrealUsdt >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
-              {formatUsdSignified(unrealUsdt)}
-            </span>
-            <span className="text-sm font-medium text-zinc-400">({formatKrw(Math.round(unrealKrw))})</span>
+            <span className="text-2xl font-black text-zinc-400">{formatKrw(ledger.initialCapitalKrw)}</span>
+            <span className="text-sm font-medium text-zinc-400">≈ {formatCurrencyUsd(ledger.initialCapitalUsd)}</span>
           </div>
         </div>
 
         <div className="rounded-xl border border-zinc-800 bg-zinc-900/40 p-5 shadow-sm">
-          <p className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">최근 7일 실현 실적</p>
+          <p className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">누적 실현 성과 (Net)</p>
           <div className="mt-2 flex items-baseline gap-2">
-            <span className={`text-2xl font-black ${realized7Usdt >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
-              {formatUsdSignified(realized7Usdt)}
+            <span className={`text-2xl font-black ${ledger.totalRealizedPnlUsd >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
+              {formatUsdSignified(ledger.totalRealizedPnlUsd)}
             </span>
-            <span className="text-sm font-medium text-zinc-400">({formatKrw(Math.round(realized7Krw))})</span>
+            <span className={`text-sm font-medium ${ledger.roiPct >= 0 ? "text-emerald-500" : "text-rose-500"}`}>
+              ({formatPercent(ledger.roiPct, "0%")} ROI)
+            </span>
           </div>
         </div>
       </div>
@@ -467,22 +472,22 @@ function PositionMoneyCard({
   const hold = formatHoldShort(n?.openedAt ?? null);
   const uClass =
     uPnL === null ? "text-zinc-300" : uPnL >= 0 ? "text-emerald-400" : "text-rose-400";
-  const side = pos.side === "short" ? "SHORT" : "LONG";
+  const side = pos.side === "short" ? "숏" : "롱";
 
   const stopDisplay =
     n?.stopPx !== null && n?.stopPx !== undefined && Number.isFinite(n.stopPx!)
-      ? formatPrice(n.stopPx, "N/A")
+      ? formatPrice(n.stopPx)
       : "미설정";
 
-  const entryDisp = n?.entryPrice !== null && n?.entryPrice !== undefined ? formatPrice(n.entryPrice, "N/A") : "N/A";
-  const markDisp = mark !== null ? formatPrice(mark, "N/A") : "N/A";
+  const entryDisp = n?.entryPrice !== null && n?.entryPrice !== undefined ? formatPrice(n.entryPrice) : "기록 없음";
+  const markDisp = mark !== null ? formatPrice(mark) : "기록 없음";
 
   const pe = coerceFinite(pos.partialExitStage);
   const exitProg =
-    typeof pe === "number" && Number.isFinite(pe) ? `${Math.max(0, Math.min(3, Math.floor(pe)))}/3` : "N/A";
+    typeof pe === "number" && Number.isFinite(pe) ? `${Math.max(0, Math.min(3, Math.floor(pe)))}/3` : "기록 없음";
 
-  const marginStr = margin !== null ? formatCurrencyUsd(margin, "N/A") : "N/A";
-  const equityStr = equityUsd !== null ? formatCurrencyUsd(equityUsd, "N/A") : "N/A";
+  const marginStr = margin !== null ? formatCurrencyUsd(margin) : "기록 없음";
+  const equityStr = equityUsd !== null ? formatCurrencyUsd(equityUsd) : "기록 없음";
 
   return (
     <div className="rounded-xl border border-emerald-500/20 bg-emerald-950/5 p-5 shadow-[0_0_20px_rgba(16,185,129,0.05)] ring-1 ring-emerald-500/10">
@@ -498,7 +503,7 @@ function PositionMoneyCard({
       <div className="mt-5 grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-6">
         <MetricCell label="진입금액 (Margin)" value={marginStr} />
         <MetricCell label="평가금액 (Equity)" value={equityStr} />
-        <MetricCell label="비중 (Weight %)" value={margin !== null ? ((margin / DISPLAY_CAPITAL_USDT) * 100).toFixed(1) + "%" : "N/A"} valueClass="text-amber-400/90" />
+        <MetricCell label="비중 (Weight %)" value={margin !== null ? ((margin / INITIAL_CAPITAL_USD) * 100).toFixed(1) + "%" : "기록 없음"} valueClass="text-amber-400/90" />
         <MetricCell label="미실현 손익" value={formatSignedUsdDisplay(uPnL)} valueClass={uClass} />
         <MetricCell label="수익률 %" value={uPct} valueClass={uClass} />
         <MetricCell label="보유시간" value={hold} className="col-span-2 sm:col-span-1 lg:col-span-1" />
@@ -523,7 +528,7 @@ function PositionMoneyCard({
         </div>
         <div>
           <p className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">최초 진입</p>
-          <p className="mt-1 font-mono tabular-nums text-zinc-400 text-[11px] leading-tight">{formatDateTimeKst(coerceFinite(pos.openedAt), "N/A")}</p>
+          <p className="mt-1 font-mono tabular-nums text-zinc-400 text-[11px] leading-tight">{formatDateTimeKst(coerceFinite(pos.openedAt))}</p>
         </div>
       </div>
 
@@ -602,7 +607,7 @@ function SymbolStatusCard({
             </div>
             <div>
               <p className="text-[10px] font-bold uppercase tracking-wider text-zinc-500">최근 업데이트</p>
-              <p className="mt-0.5 text-[10px] text-zinc-500">{formatDateTimeKst(row.fetchedAt, "N/A")}</p>
+              <p className="mt-0.5 text-[10px] text-zinc-500">{formatDateTimeKst(row.fetchedAt)}</p>
             </div>
           </div>
         </div>
@@ -632,7 +637,7 @@ function RecentPerformanceSection({
         <h2 className="text-xs font-bold uppercase tracking-widest text-zinc-500">최근 실적 및 종료 이력</h2>
       </div>
       <div className="grid gap-3 grid-cols-2 sm:grid-cols-3 lg:grid-cols-5">
-        <MetricCell label="최근 24시간 손익" value={pnl24h !== null ? formatSignedUsdDisplay(pnl24h) : "N/A"} valueClass={pnl24h === null ? "" : pnl24h >= 0 ? "text-emerald-400" : "text-rose-400"} />
+        <MetricCell label="최근 24시간 손익" value={pnl24h !== null ? formatSignedUsdDisplay(pnl24h) : "기록 없음"} valueClass={pnl24h === null ? "" : pnl24h >= 0 ? "text-emerald-400" : "text-rose-400"} />
         <MetricCell label="최근 7일 손익" value={formatSignedUsdDisplay(w7?.totalPnlUsdNet ?? null)} valueClass={(w7?.totalPnlUsdNet ?? 0) >= 0 ? "text-emerald-400" : "text-rose-400"} />
         <MetricCell label="최근 30일 손익" value={formatSignedUsdDisplay(w30?.totalPnlUsdNet ?? null)} valueClass={(w30?.totalPnlUsdNet ?? 0) >= 0 ? "text-emerald-400" : "text-rose-400"} />
         <MetricCell label="최근 7일 승률" value={formatPercent(w7?.winRate ?? null)} />
@@ -666,20 +671,30 @@ function RecentPerformanceSection({
                   <tr key={i} className="hover:bg-zinc-800/30 transition-colors">
                     <td className="px-5 py-3.5 font-mono font-bold text-zinc-100">{t.symbol}</td>
                     <td className="px-5 py-3.5">
-                      <span className={`rounded px-1.5 py-0.5 text-[10px] font-bold uppercase ${t.side === "short" ? "bg-rose-950/30 text-rose-400 ring-1 ring-rose-500/30" : "bg-emerald-950/30 text-emerald-400 ring-1 ring-emerald-500/30"}`}>
-                        {t.side}
+                      <span className={`rounded px-1.5 py-0.5 text-[10px] font-bold ${t.side === "short" ? "bg-rose-950/30 text-rose-400 ring-1 ring-rose-500/30" : "bg-emerald-950/30 text-emerald-400 ring-1 ring-emerald-500/30"}`}>
+                        {t.side === "short" ? "숏" : "롱"}
                       </span>
                     </td>
-                    <td className="px-5 py-3.5 font-mono text-zinc-300">{formatPrice(t.entryPrice, "N/A")}</td>
-                    <td className="px-5 py-3.5 font-mono text-zinc-300">{formatPrice(t.exitPrice, "N/A")}</td>
+                    <td className="px-5 py-3.5 font-mono text-zinc-300">{formatPrice(t.entryPrice)}</td>
+                    <td className="px-5 py-3.5 font-mono text-zinc-300">{formatPrice(t.exitPrice)}</td>
                     <td className={`px-5 py-3.5 font-mono font-bold ${(t.pnlUsdNet || 0) >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
                       {formatSignedUsdDisplay(t.pnlUsdNet)}
                     </td>
                     <td className={`px-5 py-3.5 font-mono font-bold ${(t.pnlUsdNet || 0) >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
-                      {t.pnlUsdNet !== null && t.initialSizeUsd ? formatPctOnMargin(t.pnlUsdNet, t.initialSizeUsd) : "N/A"}
+                      {t.pnlUsdNet !== null && t.initialSizeUsd ? formatPctOnMargin(t.pnlUsdNet, t.initialSizeUsd) : "기록 없음"}
                     </td>
-                    <td className="px-5 py-3.5 text-zinc-400">{mapReasonLabel(t.exitType || t.exitReason || "N/A")}</td>
-                    <td className="px-5 py-3.5 text-right text-[10px] text-zinc-500">{formatDateTimeKst(t.closedAt, "N/A")}</td>
+                    <td className="px-5 py-3.5">
+                      {(() => {
+                        const { label, desc, code } = formatExitReason(t.exitType || t.exitReason);
+                        return (
+                          <div className="flex flex-col">
+                            <span className="font-bold text-zinc-100">{label}</span>
+                            <span className="text-[10px] text-zinc-500">{desc} ({code})</span>
+                          </div>
+                        );
+                      })()}
+                    </td>
+                    <td className="px-5 py-3.5 text-right text-[10px] text-zinc-500">{formatDateTimeKst(t.closedAt)}</td>
                   </tr>
                 ))
               )}
@@ -693,7 +708,6 @@ function RecentPerformanceSection({
 
 function LastClosedSummaryCard({ trade }: { trade: any }) {
   if (!trade) return null;
-  const side = trade.side === "short" ? "SHORT" : "LONG";
   const pnlClass = (trade.pnlUsdNet ?? 0) >= 0 ? "text-emerald-400" : "text-rose-400";
   const holdMin = trade.closedAt && trade.openedAt ? Math.floor((trade.closedAt - trade.openedAt) / 60000) : null;
 
@@ -705,13 +719,24 @@ function LastClosedSummaryCard({ trade }: { trade: any }) {
           <div className="flex items-center gap-4">
             <div className="font-mono text-lg font-black text-zinc-100">{trade.symbol}</div>
             <span className={`rounded-md px-2 py-0.5 text-[10px] font-bold ring-1 ${trade.side === "short" ? "bg-rose-950/30 text-rose-400 ring-rose-500/30" : "bg-emerald-950/30 text-emerald-400 ring-emerald-500/30"}`}>
-              {side}
+              {trade.side === "short" ? "숏" : "롱"}
             </span>
           </div>
           <div className="flex flex-wrap gap-x-8 gap-y-2">
             <div>
               <p className="text-[10px] font-bold uppercase tracking-wider text-zinc-500">종료 사유</p>
-              <p className="mt-1 text-sm font-bold text-zinc-200">{mapReasonLabel(trade.exitType || trade.exitReason || "N/A")}</p>
+              {(() => {
+                const { label, desc, code } = formatExitReason(trade.exitType || trade.exitReason);
+                return (
+                  <div className="mt-1">
+                    <div className="flex items-baseline gap-2">
+                      <span className="text-sm font-bold text-zinc-100">{label}</span>
+                      <span className="text-[10px] text-zinc-500 uppercase">{code}</span>
+                    </div>
+                    <p className="text-[10px] text-zinc-400">{desc}</p>
+                  </div>
+                );
+              })()}
             </div>
             <div>
               <p className="text-[10px] font-bold uppercase tracking-wider text-zinc-500">실현 손익</p>
@@ -719,7 +744,7 @@ function LastClosedSummaryCard({ trade }: { trade: any }) {
             </div>
             <div>
               <p className="text-[10px] font-bold uppercase tracking-wider text-zinc-500">종료 시각</p>
-              <p className="mt-1 font-mono text-xs text-zinc-400">{formatDateTimeKst(trade.closedAt, "N/A")}</p>
+              <p className="mt-1 font-mono text-xs text-zinc-400">{formatDateTimeKst(trade.closedAt)}</p>
             </div>
             {holdMin !== null && (
               <div>
@@ -783,6 +808,8 @@ export default function FuturesPaperPage() {
   const symbolDecisions = (engine as any)?.symbol_decisions ?? null;
 
   const pm = bundle ? aggregatePortfolioMetricsFromBundle(bundle) : { openCount: 0, totalUnreal: 0 };
+  const ledger = computeLedgerPerformanceFromHistory(history);
+
   const realized7Num = w7?.totalPnlUsdNet ?? null;
   const win7Num = w7?.winRate ?? null;
 
@@ -831,26 +858,27 @@ export default function FuturesPaperPage() {
             {/* ROW 1: Hero Metrics */}
             <section className="grid grid-cols-2 gap-4 lg:grid-cols-4">
               <HeroMetric
-                label="총 운용금액 (Portfolio)"
-                value={formatKrw(DISPLAY_CAPITAL_KRW)}
-                subValue={`≈ ${formatCurrencyUsd(DISPLAY_CAPITAL_USDT)}`}
+                label="현재 운용자산 (Current)"
+                value={formatKrw(ledger.currentCapitalKrw)}
+                subValue={`≈ ${formatCurrencyUsd(ledger.currentCapitalUsd)}`}
                 valueClass="text-amber-400"
               />
               <HeroMetric
-                label="현재 미실현 손익 (USD)"
+                label="누적 실현손익 (Total Net)"
+                value={formatSignedUsdDisplay(ledger.totalRealizedPnlUsd)}
+                subValue={`${formatPercent(ledger.roiPct)} ROI`}
+                valueClass={ledger.totalRealizedPnlUsd >= 0 ? "text-emerald-400" : "text-rose-400"}
+              />
+              <HeroMetric
+                label="현재 미실현 손익 (Unreal)"
                 value={formatSignedUsdDisplay(pm.totalUnreal)}
                 valueClass={pm.totalUnreal >= 0 ? "text-emerald-400" : "text-rose-400"}
               />
-              <HeroMetric
-                label="최근 7일 실현 손익 (USD)"
-                value={formatSignedUsdDisplay(realized7Num)}
-                valueClass={(realized7Num ?? 0) >= 0 ? "text-emerald-400" : "text-rose-400"}
-              />
-              <HeroMetric label="보유 포지션 / 승률" value={`${pm.openCount}건 / ${formatPercent(win7Num)}`} />
+              <HeroMetric label="보유 포지션 / 총 거래" value={`${pm.openCount}건 / ${formatCount(ledger.tradeCount)}건`} />
             </section>
 
             {/* ROW 2: Account Overview */}
-            <AccountOverviewSection pm={pm} perf={perf} usdkrwRate={USDKRW_RATE} />
+            <AccountOverviewSection pm={pm} perf={perf} usdkrwRate={USDKRW_RATE} ledger={ledger} />
 
             {/* ROW 3: Current Positions */}
             <section className="space-y-4">
@@ -884,7 +912,7 @@ export default function FuturesPaperPage() {
 
             {/* ROW 4: Exposure / Weight */}
             {openPositions.length > 0 && (
-              <ExposureSection openPositions={openPositions} totalCapitalUsdt={DISPLAY_CAPITAL_USDT} />
+              <ExposureSection openPositions={openPositions} totalCapitalUsdt={ledger.currentCapitalUsd} />
             )}
 
             {/* ROW 5: Last Closed Summary */}
@@ -925,23 +953,31 @@ export default function FuturesPaperPage() {
               </summary>
               <div className="space-y-8 border-t border-zinc-800/50 p-6">
                 <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-                  <MetricCell label="현재 레짐 (Regime)" value={String(curRegime || "N/A")} valueClass="text-amber-200" />
-                  <MetricCell label="실행기 (Executor)" value={String(executor || "N/A")} />
-                  <MetricCell label="위험 상태 (Risk)" value={String(riskState || "N/A")} />
-                  <MetricCell label="엔진 상태 (Status)" value={String(bundle?.engineState?.engine_status || "N/A")} />
+                  <MetricCell label="현재 레짐 (Regime)" value={String(curRegime || "기록 없음")} valueClass="text-amber-200" />
+                  <MetricCell label="실행기 (Executor)" value={String(executor || "기록 없음")} />
+                  <MetricCell label="위험 상태 (Risk)" value={String(riskState || "기록 없음")} />
+                  <MetricCell label="엔진 상태 (Status)" value={String(bundle?.engineState?.engine_status || "기록 없음")} />
                 </div>
 
                 <div className="grid gap-6 lg:grid-cols-2">
                   <div className="rounded-xl border border-zinc-800 bg-zinc-900/40 p-5">
-                    <p className="mb-4 text-[10px] font-bold uppercase tracking-widest text-zinc-500">AI 승인 및 차단 현황</p>
+                    <p className="mb-4 text-[10px] font-bold uppercase tracking-widest text-zinc-500">신호 승인 및 차단 현황 (임시)</p>
                     <div className="flex justify-between text-sm">
-                      <span className="text-zinc-400">AI 승인율</span>
-                      <span className="text-zinc-100 font-mono">84.2% (임시)</span>
+                      <span className="text-zinc-400 font-medium">신호 승인율(임시)</span>
+                      <span className="text-zinc-100 font-mono">84.2%</span>
                     </div>
+                    <p className="mt-2 text-[10px] text-zinc-600 leading-relaxed">
+                      ※ 내부 품질 필터 기준 통과 비율 (운영참조용)<br />
+                      엔진 내부 승인 로직에 따른 임시 지표입니다.
+                    </p>
                   </div>
                   <div className="rounded-xl border border-zinc-800 bg-zinc-900/40 p-5">
-                    <p className="mb-4 text-[10px] font-bold uppercase tracking-widest text-zinc-500">종료 타입(EXIT) 분포</p>
-                    <p className="font-mono text-xs text-zinc-400">TP 60% · SL 5% · REGIME 10% · TREND 25% (임시)</p>
+                    <p className="mb-4 text-[10px] font-bold uppercase tracking-widest text-zinc-500">종료 사유 분포 (임시)</p>
+                    <p className="font-mono text-xs text-zinc-400">TP 60% · SL 5% · REGIME 10% · TREND 25%</p>
+                    <p className="mt-3 text-[10px] text-zinc-600 leading-relaxed">
+                      ※ 엔진 내부 종료 사유별 통계 (임시 데이터)<br />
+                      운영자의 로직 분석을 위한 보조 지표입니다.
+                    </p>
                   </div>
                 </div>
               </div>
