@@ -130,10 +130,10 @@ function markForPosition(
   pos: Record<string, unknown>,
   row: Record<string, unknown> | undefined,
   dec?: Record<string, unknown> | null
-) {
-  const lp = row && coerceFinite(row.lastPrice);
+): number | null {
+  const lp = row ? coerceFinite(row.lastPrice) : null;
   if (lp !== null) return lp;
-  const dm = dec && coerceFinite(dec.mark);
+  const dm = dec ? coerceFinite(dec.mark) : null;
   if (dm !== null) return dm;
   return coerceFinite(pos.currentPrice);
 }
@@ -423,7 +423,7 @@ function PositionMoneyCard({
             <p className="text-[10px] font-bold uppercase tracking-wider text-zinc-500">현재 가이드</p>
             <p className="mt-0.5 text-sm font-medium text-zinc-200">{dec?.guidance ? String(dec.guidance) : "관망 및 신호 대기"}</p>
           </div>
-          {dec?.next_action && (
+          {!!dec?.next_action && (
             <div className="rounded-md bg-amber-950/20 px-3 py-2.5 ring-1 ring-amber-900/40">
               <p className="text-[10px] font-bold uppercase tracking-wider text-amber-500/80">다음 예상 행동</p>
               <p className="mt-0.5 text-sm font-bold text-amber-200">{String(dec.next_action)}</p>
@@ -432,7 +432,7 @@ function PositionMoneyCard({
           <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 text-sm">
             <dt className="text-zinc-500">최초 진입</dt>
             <dd className="text-xs text-zinc-400">{formatDateTimeKst(coerceFinite(pos.openedAt), "N/A")}</dd>
-            {pos.targetPrices && Array.isArray(pos.targetPrices) && (pos.targetPrices as unknown[]).length > 0 && (
+            {!!pos.targetPrices && Array.isArray(pos.targetPrices) && (pos.targetPrices as unknown[]).length > 0 && (
               <>
                 <dt className="text-zinc-500">목표가 (Targets)</dt>
                 <dd className="space-x-2 tabular-nums font-mono text-xs text-emerald-400">
@@ -504,14 +504,14 @@ function SymbolJudgmentCard({
               String(row.symbol)
             ]?.decision;
             const s1Code = dec?.stage1_result_code;
-            const s1Label = (s1Code && STAGE1_RESULT_LABELS[String(s1Code)]) || String(s1Code ?? "");
+            const s1Label = STAGE1_RESULT_LABELS[String(s1Code ?? "")] || String(s1Code ?? "");
             const failReason = dec?.final_fail_reason;
             const reqMove = dec?.required_move_pct;
             const shortfall = dec?.shortfall_pct;
 
             return (
               <div className="mt-2 space-y-2">
-                {s1Code && (
+                {!!s1Code && (
                   <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
                     <div className="flex items-center gap-2">
                       <span className="text-[10px] font-bold uppercase text-zinc-500">Stage 1:</span>
@@ -535,7 +535,7 @@ function SymbolJudgmentCard({
                     )}
                   </div>
                 )}
-                {failReason && (
+                {!!failReason && (
                   <p className="rounded bg-rose-950/20 p-1 text-[9px] leading-tight text-rose-400/80">
                     실패 사유: {String(failReason)}
                   </p>
@@ -766,13 +766,13 @@ export default function FuturesPaperPage() {
               <Stat label="레짐(Regime)" value={`${String(curRegime ?? "-")}${isAmbiguous ? " (모호/인접)" : ""}`} />
               <Stat label="실행기(Executor)" value={String(executor ?? "-")} />
               <Stat label="위험도(Risk)" value={String(riskState ?? "-")} />
-              <Stat label="엔진 상태" value={mapStatusLabel(engineStatus)} />
+              <Stat label="엔진 상태" value={mapStatusLabel(String(engineStatus ?? ""))} />
               <Stat label="AI 승인율" value={formatPercent(aiApprovalRate, "N/A")} />
               <Stat label="AI 차단 품질" value={formatPercent(aiQualityRate, "N/A")} />
               <Stat label="레인지 손익" value={formatCurrencyUsd(rangeNet, "N/A")} />
               <Stat label="트렌드 손익" value={formatCurrencyUsd(trendNet, "N/A")} />
-              <Stat label="전체 누적" value={formatCurrencyUsd(all?.totalPnlUsdNet, "N/A")} />
-              <Stat label="최신 갱신" value={formatDateTimeKst(generatedMs, "N/A")} />
+              <Stat label="전체 누적" value={formatCurrencyUsd(num(all?.totalPnlUsdNet), "N/A")} />
+              <Stat label="최신 갱신" value={formatDateTimeKst(num(generatedMs), "N/A")} />
             </div>
             <div className="grid gap-4 lg:grid-cols-2">
               <div className="rounded-lg border border-zinc-800 bg-zinc-950/50 p-4">
@@ -824,7 +824,7 @@ export default function FuturesPaperPage() {
               <div className="grid gap-5 lg:grid-cols-2">
                 <div>
                   <p className="text-xs text-zinc-500">직전 스냅샷 대비</p>
-                  <p className="mt-1 text-sm font-medium text-zinc-100">{formatChanged(trend?.changed)}</p>
+                  <p className="mt-1 text-sm font-medium text-zinc-100">{formatChanged(num(trend?.changed))}</p>
                 </div>
                 <div>
                   <p className="text-xs text-zinc-500">상태 카운트 (최근 10회 구간)</p>
@@ -843,8 +843,8 @@ export default function FuturesPaperPage() {
                   </div>
                 </div>
                 <div className="lg:col-span-2 grid gap-1 text-xs text-zinc-600 sm:grid-cols-2">
-                  <span>기준 시각: {formatDateTimeKst(trend?.latestGeneratedAt, "N/A")}</span>
-                  <span>이전 시각: {formatDateTimeKst(trend?.previousGeneratedAt, "N/A")}</span>
+                  <span>기준 시각: {formatDateTimeKst(num(trend?.latestGeneratedAt), "N/A")}</span>
+                  <span>이전 시각: {formatDateTimeKst(num(trend?.previousGeneratedAt), "N/A")}</span>
                 </div>
               </div>
             </section>
@@ -864,12 +864,12 @@ export default function FuturesPaperPage() {
                         key={`${h.generatedAt}-${i}`}
                         className="flex flex-col gap-2 py-3 sm:flex-row sm:flex-wrap sm:items-start sm:gap-3"
                       >
-                        <span className="shrink-0 text-xs text-zinc-500">{formatDateTimeKst(h.generatedAt, "N/A")}</span>
+                        <span className="shrink-0 text-xs text-zinc-500">{formatDateTimeKst(num(h.generatedAt), "N/A")}</span>
                         <span
                           className="shrink-0 rounded-md bg-zinc-800 px-2 py-0.5 text-xs text-amber-200"
                           title={String(h.status ?? "")}
                         >
-                          {mapStatusLabel(h.status)}
+                          {mapStatusLabel(String(h.status ?? ""))}
                         </span>
                         <div className="min-w-0 flex-1">
                           {Array.isArray(h.reasons) && (h.reasons as string[]).length > 0 ? (
@@ -947,11 +947,11 @@ function MiniBlock({ title, slice }: { title: string; slice: unknown }) {
       <div className="mt-4 flex items-end justify-between">
         <div>
           <p className="text-[10px] text-zinc-500">순손익 (Net)</p>
-          <p className="font-mono text-base font-bold text-amber-100">{formatCurrencyUsd(pnl)}</p>
+          <p className="font-mono text-base font-bold text-amber-100">{formatCurrencyUsd(num(pnl))}</p>
         </div>
         <div className="text-right">
           <p className="text-[10px] text-zinc-500">승률</p>
-          <p className="font-mono text-sm font-semibold text-zinc-300">{formatPercent(wr)}</p>
+          <p className="font-mono text-sm font-semibold text-zinc-300">{formatPercent(num(wr))}</p>
         </div>
       </div>
 
@@ -961,7 +961,7 @@ function MiniBlock({ title, slice }: { title: string; slice: unknown }) {
           <dl className="mt-2 space-y-1 text-[10px] text-zinc-500 border-t border-zinc-800/50 pt-2">
             <div className="flex justify-between">
               <dt>총 거래</dt>
-              <dd className="font-mono tabular-nums">{formatCount(trades)}건</dd>
+              <dd className="font-mono tabular-nums">{formatCount(num(trades))}건</dd>
             </div>
             <div className="flex justify-between">
               <dt>수수료 합계</dt>
