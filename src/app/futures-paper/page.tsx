@@ -211,15 +211,31 @@ function aggregatePortfolioMetricsFromBundle(bundle: Bundle) {
 
 const SYMBOL_ORDER = ["BTCUSDT", "ETHUSDT"];
 
+/** UI Constants & Exchange Logic */
+const DISPLAY_CAPITAL_KRW = 450000;
+const USDKRW_RATE = 1350; // Fixed rate for UI feedback
+const DISPLAY_CAPITAL_USDT = DISPLAY_CAPITAL_KRW / USDKRW_RATE;
+
+function formatKrw(v: number): string {
+  return "₩" + v.toLocaleString("ko-KR");
+}
+
+function formatUsdSignified(v: number | null): string {
+  if (v === null || !Number.isFinite(v)) return "$0.00";
+  return (v >= 0 ? "+" : "−") + "$" + Math.abs(v).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
 /** Components */
 
 function HeroMetric({
   label,
   value,
+  subValue,
   valueClass
 }: {
   label: string;
   value: string;
+  subValue?: string;
   valueClass?: string;
 }) {
   return (
@@ -227,8 +243,119 @@ function HeroMetric({
       <p className={`text-3xl font-black tabular-nums tracking-tighter sm:text-4xl ${valueClass ?? "text-zinc-100"}`}>
         {value}
       </p>
+      {subValue && <p className="mt-1 text-sm font-medium text-zinc-400">{subValue}</p>}
       <p className="mt-2 text-[10px] font-bold uppercase tracking-widest text-zinc-500">{label}</p>
     </div>
+  );
+}
+
+function AccountOverviewSection({
+  pm,
+  perf,
+  usdkrwRate
+}: {
+  pm: { openCount: number, totalUnreal: number },
+  perf: LedgerPerformance | null,
+  usdkrwRate: number
+}) {
+  const totalAssetsKrw = DISPLAY_CAPITAL_KRW;
+  const totalAssetsUsdt = DISPLAY_CAPITAL_USDT;
+  const unrealUsdt = pm.totalUnreal;
+  const unrealKrw = unrealUsdt * usdkrwRate;
+
+  const realized7Usdt = perf?.last7d?.totalPnlUsdNet ?? 0;
+  const realized7Krw = realized7Usdt * usdkrwRate;
+
+  return (
+    <section className="space-y-4">
+      <h2 className="text-xs font-bold uppercase tracking-widest text-zinc-500">계좌 개요 (Account Overview)</h2>
+      <div className="grid gap-4 md:grid-cols-3">
+        <div className="rounded-xl border border-zinc-800 bg-zinc-900/40 p-5 shadow-sm">
+          <p className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">총 운용 자산</p>
+          <div className="mt-2 flex items-baseline gap-2">
+            <span className="text-2xl font-black text-zinc-100">{formatKrw(totalAssetsKrw)}</span>
+            <span className="text-sm font-medium text-zinc-400">≈ {formatCurrencyUsd(totalAssetsUsdt)}</span>
+          </div>
+          <p className="mt-1 text-[10px] text-zinc-600">기준 환율: 1 USDT ≈ {formatKrw(usdkrwRate)}</p>
+        </div>
+
+        <div className="rounded-xl border border-zinc-800 bg-zinc-900/40 p-5 shadow-sm">
+          <p className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">미실현 손익</p>
+          <div className="mt-2 flex items-baseline gap-2">
+            <span className={`text-2xl font-black ${unrealUsdt >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
+              {formatUsdSignified(unrealUsdt)}
+            </span>
+            <span className="text-sm font-medium text-zinc-400">({formatKrw(Math.round(unrealKrw))})</span>
+          </div>
+        </div>
+
+        <div className="rounded-xl border border-zinc-800 bg-zinc-900/40 p-5 shadow-sm">
+          <p className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">최근 7일 실현 실적</p>
+          <div className="mt-2 flex items-baseline gap-2">
+            <span className={`text-2xl font-black ${realized7Usdt >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
+              {formatUsdSignified(realized7Usdt)}
+            </span>
+            <span className="text-sm font-medium text-zinc-400">({formatKrw(Math.round(realized7Krw))})</span>
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function ExposureSection({
+  openPositions,
+  totalCapitalUsdt
+}: {
+  openPositions: any[],
+  totalCapitalUsdt: number
+}) {
+  const totalExposureUsdt = openPositions.reduce((acc, p) => acc + (coerceFinite(p.sizeUsd) || coerceFinite(p.initialSizeUsd) || 0), 0);
+  const exposurePct = (totalExposureUsdt / totalCapitalUsdt) * 100;
+
+  return (
+    <section className="space-y-4">
+      <h2 className="text-xs font-bold uppercase tracking-widest text-zinc-500">포지션 비중 / 노출</h2>
+      <div className="rounded-xl border border-zinc-800 bg-zinc-900/40 p-5">
+        <div className="flex items-center justify-between mb-3">
+          <p className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">총 노출 비중</p>
+          <p className="text-sm font-black text-amber-400">{exposurePct.toFixed(1)}%</p>
+        </div>
+        <div className="h-2 w-full bg-zinc-800 rounded-full overflow-hidden flex">
+          {openPositions.map((p, i) => {
+            const margin = coerceFinite(p.sizeUsd) || coerceFinite(p.initialSizeUsd) || 0;
+            const pct = (margin / totalCapitalUsdt) * 100;
+            return (
+              <div
+                key={i}
+                style={{ width: `${pct}%` }}
+                className={`${p.symbol === "BTCUSDT" ? "bg-amber-500" : "bg-blue-500"} h-full border-r border-zinc-900`}
+                title={`${p.symbol}: ${pct.toFixed(1)}%`}
+              />
+            );
+          })}
+        </div>
+        <div className="mt-4 flex gap-6">
+          {["BTCUSDT", "ETHUSDT"].map(sym => {
+            const p = openPositions.find(x => x.symbol === sym);
+            const margin = p ? (coerceFinite(p.sizeUsd) || coerceFinite(p.initialSizeUsd) || 0) : 0;
+            const pct = (margin / totalCapitalUsdt) * 100;
+            return (
+              <div key={sym} className="flex items-center gap-2">
+                <div className={`h-2 w-2 rounded-full ${sym === "BTCUSDT" ? "bg-amber-500" : "bg-blue-500"}`} />
+                <span className="text-[10px] font-bold text-zinc-400">{sym}</span>
+                <span className="text-xs font-mono text-zinc-200">{pct.toFixed(1)}%</span>
+              </div>
+            );
+          })}
+          <div className="flex items-center gap-2">
+            <div className="h-2 w-2 rounded-full bg-zinc-800" />
+            <span className="text-[10px] font-bold text-zinc-400">IDLE CAPITAL</span>
+            <span className="text-xs font-mono text-zinc-500">{(100 - exposurePct).toFixed(1)}%</span>
+          </div>
+        </div>
+      </div>
+    </section>
   );
 }
 
@@ -368,12 +495,13 @@ function PositionMoneyCard({
         </div>
       </div>
 
-      <div className="mt-5 grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">
+      <div className="mt-5 grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-6">
         <MetricCell label="진입금액 (Margin)" value={marginStr} />
         <MetricCell label="평가금액 (Equity)" value={equityStr} />
+        <MetricCell label="비중 (Weight %)" value={margin !== null ? ((margin / DISPLAY_CAPITAL_USDT) * 100).toFixed(1) + "%" : "N/A"} valueClass="text-amber-400/90" />
         <MetricCell label="미실현 손익" value={formatSignedUsdDisplay(uPnL)} valueClass={uClass} />
         <MetricCell label="수익률 %" value={uPct} valueClass={uClass} />
-        <MetricCell label="보유시간" value={hold} className="col-span-2 sm:col-span-1" />
+        <MetricCell label="보유시간" value={hold} className="col-span-2 sm:col-span-1 lg:col-span-1" />
       </div>
 
       <div className="mt-6 grid grid-cols-2 gap-x-4 gap-y-3 border-t border-zinc-800/50 pt-5 text-sm sm:grid-cols-3 lg:grid-cols-5">
@@ -518,7 +646,10 @@ function RecentPerformanceSection({
               <tr>
                 <th className="px-5 py-3">종목</th>
                 <th className="px-5 py-3">방향</th>
-                <th className="px-5 py-3">손익 (USD)</th>
+                <th className="px-5 py-3">진입가</th>
+                <th className="px-5 py-3">종료가</th>
+                <th className="px-5 py-3">실현 손익</th>
+                <th className="px-5 py-3">수익률</th>
                 <th className="px-5 py-3">종료 사유</th>
                 <th className="px-5 py-3 text-right">종료 시각</th>
               </tr>
@@ -539,8 +670,13 @@ function RecentPerformanceSection({
                         {t.side}
                       </span>
                     </td>
-                    <td className={`px-5 py-3.5 font-mono font-bold ${t.pnlUsdNet >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
+                    <td className="px-5 py-3.5 font-mono text-zinc-300">{formatPrice(t.entryPrice, "N/A")}</td>
+                    <td className="px-5 py-3.5 font-mono text-zinc-300">{formatPrice(t.exitPrice, "N/A")}</td>
+                    <td className={`px-5 py-3.5 font-mono font-bold ${(t.pnlUsdNet || 0) >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
                       {formatSignedUsdDisplay(t.pnlUsdNet)}
+                    </td>
+                    <td className={`px-5 py-3.5 font-mono font-bold ${(t.pnlUsdNet || 0) >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
+                      {t.pnlUsdNet !== null && t.initialSizeUsd ? formatPctOnMargin(t.pnlUsdNet, t.initialSizeUsd) : "N/A"}
                     </td>
                     <td className="px-5 py-3.5 text-zinc-400">{mapReasonLabel(t.exitType || t.exitReason || "N/A")}</td>
                     <td className="px-5 py-3.5 text-right text-[10px] text-zinc-500">{formatDateTimeKst(t.closedAt, "N/A")}</td>
@@ -694,7 +830,12 @@ export default function FuturesPaperPage() {
           <>
             {/* ROW 1: Hero Metrics */}
             <section className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-              <HeroMetric label="현재 보유 포지션 수" value={formatCount(pm.openCount) + "건"} />
+              <HeroMetric
+                label="총 운용금액 (Portfolio)"
+                value={formatKrw(DISPLAY_CAPITAL_KRW)}
+                subValue={`≈ ${formatCurrencyUsd(DISPLAY_CAPITAL_USDT)}`}
+                valueClass="text-amber-400"
+              />
               <HeroMetric
                 label="현재 미실현 손익 (USD)"
                 value={formatSignedUsdDisplay(pm.totalUnreal)}
@@ -705,13 +846,16 @@ export default function FuturesPaperPage() {
                 value={formatSignedUsdDisplay(realized7Num)}
                 valueClass={(realized7Num ?? 0) >= 0 ? "text-emerald-400" : "text-rose-400"}
               />
-              <HeroMetric label="최근 7일 승률 (%)" value={formatPercent(win7Num)} />
+              <HeroMetric label="보유 포지션 / 승률" value={`${pm.openCount}건 / ${formatPercent(win7Num)}`} />
             </section>
 
-            {/* ROW 2: Current Positions */}
+            {/* ROW 2: Account Overview */}
+            <AccountOverviewSection pm={pm} perf={perf} usdkrwRate={USDKRW_RATE} />
+
+            {/* ROW 3: Current Positions */}
             <section className="space-y-4">
               <div className="flex items-center justify-between">
-                <h2 className="text-xs font-bold uppercase tracking-widest text-zinc-500">현재 포지션</h2>
+                <h2 className="text-xs font-bold uppercase tracking-widest text-zinc-500">현재 포지션 (Current Positions)</h2>
                 <button
                   onClick={() => setShowInternalTags(!showInternalTags)}
                   className="rounded bg-zinc-800 px-3 py-1.5 text-[10px] font-bold text-zinc-400 transition-colors hover:bg-zinc-700 hover:text-zinc-200"
@@ -738,10 +882,18 @@ export default function FuturesPaperPage() {
               </div>
             </section>
 
-            {/* ROW 3: Last Closed Summary */}
+            {/* ROW 4: Exposure / Weight */}
+            {openPositions.length > 0 && (
+              <ExposureSection openPositions={openPositions} totalCapitalUsdt={DISPLAY_CAPITAL_USDT} />
+            )}
+
+            {/* ROW 5: Last Closed Summary */}
             <LastClosedSummaryCard trade={lastClosed} />
 
-            {/* ROW 4: Symbol Status Cards */}
+            {/* ROW 6: Recent Performance & History */}
+            <RecentPerformanceSection perf={perf} history={history} />
+
+            {/* ROW 7: Symbol Status Cards */}
             <section className="space-y-4">
               <h2 className="text-xs font-bold uppercase tracking-widest text-zinc-500">종목별 현재 상태</h2>
               <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-2">
@@ -761,9 +913,6 @@ export default function FuturesPaperPage() {
                 })}
               </div>
             </section>
-
-            {/* ROW 5: Recent Performance & History */}
-            <RecentPerformanceSection perf={perf} history={history} />
 
             {/* BOTTOM: Operator / Developer Details */}
             <details className="group mt-12 overflow-hidden rounded-xl border border-zinc-800 bg-zinc-900/10">
