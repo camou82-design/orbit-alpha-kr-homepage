@@ -220,7 +220,7 @@ const SYMBOL_ORDER = ["BTCUSDT", "ETHUSDT"];
 // Moved to futuresPaperFormat.ts
 
 function formatKrw(v: number): string {
-  return "₩" + v.toLocaleString("ko-KR");
+  return "₩" + v.toLocaleString("ko-KR", { minimumFractionDigits: 0, maximumFractionDigits: 0 });
 }
 
 function formatUsdSignified(v: number | null): string {
@@ -404,50 +404,89 @@ function StageProgress({ current, total, colorClass, label }: { current: number;
   );
 }
 
-function getRepresentativeStatus(row: any, dec: any, hasPosition: boolean) {
-  if (hasPosition) {
+type SymbolDecisionSummary = {
+  authority_decision?: string | null;
+  authority_side?: string | null;
+  adopted_engine?: string | null;
+  adoption_reason?: string | null;
+  v1_decision?: string | null;
+  v1_side?: string | null;
+  v2_decision?: string | null;
+  v2_side?: string | null;
+  selector_mismatch?: boolean | null;
+};
+
+type SymbolStatusDisplay = {
+  label: string;
+  reason: string;
+};
+
+function buildSymbolStatusDisplay(decision?: SymbolDecisionSummary | null): SymbolStatusDisplay {
+  const authorityDecision = decision?.authority_decision ?? null;
+  const authoritySide = decision?.authority_side ?? null;
+  const adoptedEngine = decision?.adopted_engine ?? null;
+  const adoptionReason = decision?.adoption_reason ?? null;
+  const v1Decision = decision?.v1_decision ?? null;
+  const v1Side = decision?.v1_side ?? null;
+  const v2Decision = decision?.v2_decision ?? null;
+  const v2Side = decision?.v2_side ?? null;
+  const selectorMismatch = decision?.selector_mismatch === true;
+
+  const sideLabel = (side: string | null | undefined) =>
+    side && side !== "none" ? side.toUpperCase() : null;
+
+  if (authorityDecision === "ENTER" && authoritySide && authoritySide !== "none") {
     return {
-      label: "포지션 보유 중",
-      reason: "수익 최적화 및 실시간 모니터링 중"
+      label: "진입 준비",
+      reason: `${authoritySide.toUpperCase()} 방향 진입 조건이 충족됨`
     };
   }
 
-  const s1Code = String(dec?.stage1_result_code || "");
-  if (s1Code === "STAGE1_EXEC_PENDING" || s1Code === "STAGE1_ENTERED") {
+  if (adoptionReason === "legacy_mode_forced" && v2Decision === "ENTER" && v2Side && v2Side !== "none") {
     return {
-      label: "진입 검토 중",
-      reason: "유효한 변동성 감지, 조건 최종 확인 중"
+      label: "레거시 우선 대기",
+      reason: `V2는 ${v2Side.toUpperCase()} 진입 신호지만 현재 서버는 legacy 강제 모드라 보류 중`
     };
   }
 
-  const failReason = String(dec?.final_fail_reason || "");
-  const suppl = Array.isArray(dec?.supplemental_reasons) ? dec.supplemental_reasons : [];
-
-  if (failReason.includes("COOLDOWN") || suppl.includes("RE-ENTRY_WAIT") || failReason.includes("LIMIT_REENTRY")) {
+  if (v2Decision === "HOLD") {
     return {
-      label: "재진입 대기 중",
-      reason: "재진입 제한 시간 적용 중"
+      label: "재확인 대기",
+      reason: "V2 기준 아직 방향 확정 전이라 한 틱 더 확인 중"
     };
   }
 
-  if (s1Code === "STAGE1_BLOCKED_RISK" || s1Code === "STAGE1_BLOCKED_LIMIT") {
+  if (v2Decision === "SKIP" && selectorMismatch) {
     return {
-      label: "리스크 제한 중",
-      reason: "리스크 한도 도달로 신규 진입 보류"
+      label: "판단 불일치 대기",
+      reason: "V1/V2 판단이 엇갈려 현재 채택 엔진 기준으로 대기 중"
     };
   }
 
-  if (s1Code === "STAGE1_BLOCKED_QUALITY" || s1Code === "STAGE1_BLOCKED_EDGE") {
+  if (v1Decision === "SKIP" && (v1Side === "none" || !v1Side)) {
     return {
-      label: "대기 중",
-      reason: "비용 대비 기대 변동 부족 또는 품질 미달"
+      label: "신호 대기",
+      reason: "현재 채택 엔진 기준 유효 진입 방향이 없음"
     };
   }
 
   return {
     label: "대기 중",
-    reason: "관망 구간으로 판단되어 대기 중"
+    reason: "현재 진입 조건이 충분히 확인되지 않아 관망 중"
   };
+}
+
+function getRepresentativeStatus(row: any, symbolData: any, hasPosition: boolean): SymbolStatusDisplay {
+  if (hasPosition) {
+    return {
+      label: "포지션 보유 중",
+      reason: "현재 열린 포지션이 있어 신규 판단보다 운용 상태를 우선 반영 중"
+    };
+  }
+
+  // Ensure we pass the decision object if it's nested, otherwise pass the symbol data itself
+  const decisionData = symbolData?.decision || symbolData;
+  return buildSymbolStatusDisplay(decisionData);
 }
 
 function PositionMoneyCard({
@@ -576,8 +615,8 @@ function SymbolStatusCard({
   hasPosition: boolean;
 }) {
   const sym = String(row.symbol);
-  const dec = (symbolDecisions as Record<string, { decision?: Record<string, unknown> }> | null)?.[sym]?.decision;
-  const rep = getRepresentativeStatus(row, dec, hasPosition);
+  const symbolData = (symbolDecisions as Record<string, any> | null)?.[sym];
+  const rep = getRepresentativeStatus(row, symbolData, hasPosition);
 
   return (
     <div className="rounded-xl border border-zinc-800 bg-zinc-900/40 p-5 shadow-sm">
@@ -910,18 +949,7 @@ export default function FuturesPaperPage() {
               </div>
             </section>
 
-            {/* ROW 4: Exposure / Weight */}
-            {openPositions.length > 0 && (
-              <ExposureSection openPositions={openPositions} totalCapitalUsdt={ledger.currentCapitalUsd} />
-            )}
-
-            {/* ROW 5: Last Closed Summary */}
-            <LastClosedSummaryCard trade={lastClosed} />
-
-            {/* ROW 6: Recent Performance & History */}
-            <RecentPerformanceSection perf={perf} history={history} />
-
-            {/* ROW 7: Symbol Status Cards */}
+            {/* ROW 4: Symbol Status Cards */}
             <section className="space-y-4">
               <h2 className="text-xs font-bold uppercase tracking-widest text-zinc-500">종목별 현재 상태</h2>
               <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-2">
@@ -941,6 +969,17 @@ export default function FuturesPaperPage() {
                 })}
               </div>
             </section>
+
+            {/* ROW 5: Exposure / Weight */}
+            {openPositions.length > 0 && (
+              <ExposureSection openPositions={openPositions} totalCapitalUsdt={ledger.currentCapitalUsd} />
+            )}
+
+            {/* ROW 6: Last Closed Summary */}
+            <LastClosedSummaryCard trade={lastClosed} />
+
+            {/* ROW 7: Recent Performance & History */}
+            <RecentPerformanceSection perf={perf} history={history} />
 
             {/* BOTTOM: Operator / Developer Details */}
             <details className="group mt-12 overflow-hidden rounded-xl border border-zinc-800 bg-zinc-900/10">
