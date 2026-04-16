@@ -91,10 +91,10 @@ export default function HomePage() {
     let scene: THREE.Scene,
       camera: THREE.PerspectiveCamera,
       renderer: THREE.WebGLRenderer,
-      earth: THREE.Mesh,
-      satPoints: THREE.Points,
-      constellationLines: THREE.LineSegments,
-      swarmPoints: THREE.Points;
+      earth: THREE.Mesh<THREE.BufferGeometry, THREE.MeshPhongMaterial>,
+      satPoints: THREE.Points<THREE.BufferGeometry, THREE.PointsMaterial>,
+      constellationLines: THREE.LineSegments<THREE.BufferGeometry, THREE.LineBasicMaterial>,
+      swarmPoints: THREE.Points<THREE.BufferGeometry, THREE.PointsMaterial>;
 
     const container = canvasRef.current;
 
@@ -238,7 +238,6 @@ export default function HomePage() {
       satPoints.rotation.y += 0.0006;
       constellationLines.rotation.y = satPoints.rotation.y;
 
-      // @ts-ignore
       constellationLines.material.opacity = 0.2 + Math.sin(time * 3) * 0.15;
 
       const srsEl = document.getElementById('live-srs');
@@ -629,11 +628,10 @@ export default function HomePage() {
                     {['건설 기본용품', '형틀', '전기', '설비', '해체정리', '시스템 비계'].map((item, index) => (
                       <span
                         key={item}
-                        className={`rounded-full border px-3.5 py-2 text-[12px] font-black tracking-[0.06em] ${
-                          index % 3 === 1
+                        className={`rounded-full border px-3.5 py-2 text-[12px] font-black tracking-[0.06em] ${index % 3 === 1
                             ? 'border-[#FFD700]/25 bg-[#1a1406]/70 text-[#FFD700]'
                             : 'border-[#00F2FF]/20 bg-[#0d1729]/75 text-[#BDF8FF]'
-                        }`}
+                          }`}
                       >
                         {item}
                       </span>
@@ -706,12 +704,12 @@ export default function HomePage() {
 
                 <div className="mt-auto pt-6 border-t border-white/10 w-full flex flex-col items-center gap-4">
                   <div className="w-full flex items-center justify-between">
-                  <div className="text-[11px] font-bold text-[#94A3B8] tracking-wide">
-                    OrbitAlpha 운영 솔루션
-                  </div>
-                  <div className="px-4 py-2 rounded-xl border border-[#00F2FF]/35 bg-[#0b1526] text-[#00F2FF] text-[12px] font-black tracking-wide hover:bg-[#12203a] transition-all">
-                    운영 보기
-                  </div>
+                    <div className="text-[11px] font-bold text-[#94A3B8] tracking-wide">
+                      OrbitAlpha 운영 솔루션
+                    </div>
+                    <div className="px-4 py-2 rounded-xl border border-[#00F2FF]/35 bg-[#0b1526] text-[#00F2FF] text-[12px] font-black tracking-wide hover:bg-[#12203a] transition-all">
+                      운영 보기
+                    </div>
                   </div>
 
                   <div className="w-full flex flex-wrap items-center justify-center gap-x-4 gap-y-2">
