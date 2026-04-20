@@ -417,12 +417,14 @@ function BlogAutomationSectionInner() {
           </div>
 
           <div className="mt-auto pt-6 flex flex-col gap-3">
-            <Link
+            <a
               href="https://kiwoom.orbitalpha.kr/paper/"
+              target="_blank"
+              rel="noopener noreferrer"
               className="px-5 py-3 rounded-xl btn-gold text-[14px] font-black tracking-wide transition-all text-center"
             >
               대시보드 열기
-            </Link>
+            </a>
             <p className="text-[11px] text-[#52525b] text-center tracking-wide">paper dashboard entry</p>
           </div>
         </div>
@@ -446,6 +448,8 @@ function BlogAutomationSectionInner() {
           <div className="mt-auto pt-6 flex flex-col gap-3">
             <Link
               href="/futures-paper"
+              target="_blank"
+              rel="noopener noreferrer"
               className="px-5 py-3 rounded-xl btn-gold text-[14px] font-black tracking-wide transition-all text-center"
             >
               대시보드 열기
@@ -481,7 +485,7 @@ function BlogAutomationSectionInner() {
             <a
               href="https://trade.orbitalpha.kr/login"
               target="_blank"
-              rel="noreferrer"
+              rel="noopener noreferrer"
               className="px-5 py-3 rounded-xl btn-gold text-[14px] font-black tracking-wide transition-all text-center"
             >
               관리시스템 로그인
