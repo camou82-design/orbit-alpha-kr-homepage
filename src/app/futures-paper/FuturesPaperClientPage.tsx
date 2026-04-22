@@ -60,7 +60,10 @@ type Bundle = {
 };
 
 type NormPos = {
-    margin: number | null;
+    /** Contract / position notional (USD), from `sizeUsd`. */
+    notionalUsd: number | null;
+    /** Collateral (USD): `marginUsd` when present, else `notionalUsd / leverage`. */
+    marginUsd: number | null;
     leverage: number;
     entryPrice: number | null;
     openedAt: number | null;
@@ -103,11 +106,20 @@ function coerceFinite(v: unknown): number | null {
     return null;
 }
 
+function entryNotionalUsd(pos: Record<string, unknown>): number | null {
+    const n = coerceFinite(pos.sizeUsd);
+    if (n !== null && n > 0) return n;
+    return null;
+}
+
 function entryMarginUsd(pos: Record<string, unknown>): number | null {
-    const a = coerceFinite(pos.sizeUsd);
-    if (a !== null && a > 0) return a;
-    const b = coerceFinite(pos.initialSizeUsd);
-    if (b !== null && b > 0) return b;
+    const direct = coerceFinite(pick(pos, ["marginUsd", "margin_usd"]));
+    if (direct !== null && direct > 0) return direct;
+    const notional = entryNotionalUsd(pos);
+    const lev = coerceFinite(pos.leverage) ?? 1;
+    if (notional !== null && notional > 0 && lev > 0) return notional / lev;
+    const leg = coerceFinite(pos.initialSizeUsd);
+    if (leg !== null && leg > 0) return leg;
     return null;
 }
 
@@ -116,7 +128,8 @@ function normalizeOpenPos(pos: Record<string, unknown>): NormPos | null {
     const opened =
         coerceFinite(pos.openedAt) ?? coerceFinite(pos.firstOpenedAt);
     return {
-        margin: entryMarginUsd(pos),
+        notionalUsd: entryNotionalUsd(pos),
+        marginUsd: entryMarginUsd(pos),
         leverage: coerceFinite(pos.leverage) ?? 1,
         entryPrice: coerceFinite(pos.entryPrice),
         openedAt: opened,
@@ -126,6 +139,17 @@ function normalizeOpenPos(pos: Record<string, unknown>): NormPos | null {
         unrealPct: coerceFinite(pos.unrealizedPnlPct),
         raw: pos
     };
+}
+
+function closedTradeMarginUsd(t: Record<string, unknown>): number | null {
+    const m = coerceFinite(pick(t, ["marginUsd", "margin_usd"]));
+    if (m !== null && m > 0) return m;
+    const sz = coerceFinite(t.sizeUsd);
+    const lev = coerceFinite(t.leverage) ?? 1;
+    if (sz !== null && sz > 0 && lev > 0) return sz / lev;
+    const ini = coerceFinite(t.initialSizeUsd);
+    if (ini !== null && ini > 0) return ini;
+    return null;
 }
 
 function markForPosition(
@@ -144,20 +168,20 @@ function unrealizedUsdResolved(n: NormPos, mark: number | null): number | null {
     const pos = n.raw;
     const side = pos.side === "short" ? "short" : "long";
     if (n.engineUnreal !== null && Number.isFinite(n.engineUnreal)) return n.engineUnreal;
-    if (n.unrealPct !== null && n.margin !== null && n.margin > 0) return (n.margin * n.unrealPct) / 100;
+    if (n.unrealPct !== null && n.marginUsd !== null && n.marginUsd > 0) return (n.marginUsd * n.unrealPct) / 100;
     if (
         mark === null ||
         n.entryPrice === null ||
         n.entryPrice <= 0 ||
-        n.margin === null ||
-        n.margin <= 0
+        n.marginUsd === null ||
+        n.marginUsd <= 0
     )
         return null;
     const lev = n.leverage;
     const gross =
         side === "long"
-            ? ((mark - n.entryPrice) / n.entryPrice) * n.margin * lev
-            : ((n.entryPrice - mark) / n.entryPrice) * n.margin * lev;
+            ? ((mark - n.entryPrice) / n.entryPrice) * n.marginUsd * lev
+            : ((n.entryPrice - mark) / n.entryPrice) * n.marginUsd * lev;
     return Number.isFinite(gross) ? gross : null;
 }
 
@@ -307,7 +331,10 @@ function ExposureSection({
     openPositions: any[],
     totalCapitalUsdt: number
 }) {
-    const totalExposureUsdt = openPositions.reduce((acc, p) => acc + (coerceFinite(p.sizeUsd) || coerceFinite(p.initialSizeUsd) || 0), 0);
+    const totalExposureUsdt = openPositions.reduce(
+        (acc, p) => acc + (entryNotionalUsd(p as Record<string, unknown>) ?? 0),
+        0
+    );
     const exposurePct = (totalExposureUsdt / totalCapitalUsdt) * 100;
 
     return (
@@ -320,8 +347,8 @@ function ExposureSection({
                 </div>
                 <div className="h-2 w-full bg-zinc-800 rounded-full overflow-hidden flex">
                     {openPositions.map((p, i) => {
-                        const margin = coerceFinite(p.sizeUsd) || coerceFinite(p.initialSizeUsd) || 0;
-                        const pct = (margin / totalCapitalUsdt) * 100;
+                        const notional = entryNotionalUsd(p as Record<string, unknown>) ?? 0;
+                        const pct = (notional / totalCapitalUsdt) * 100;
                         return (
                             <div
                                 key={i}
@@ -335,8 +362,8 @@ function ExposureSection({
                 <div className="mt-4 flex gap-6">
                     {["BTCUSDT", "ETHUSDT"].map(sym => {
                         const p = openPositions.find(x => x.symbol === sym);
-                        const margin = p ? (coerceFinite(p.sizeUsd) || coerceFinite(p.initialSizeUsd) || 0) : 0;
-                        const pct = (margin / totalCapitalUsdt) * 100;
+                        const notional = p ? entryNotionalUsd(p as Record<string, unknown>) ?? 0 : 0;
+                        const pct = (notional / totalCapitalUsdt) * 100;
                         return (
                             <div key={sym} className="flex items-center gap-2">
                                 <div className={`h-2 w-2 rounded-full ${sym === "BTCUSDT" ? "bg-amber-500" : "bg-blue-500"}`} />
@@ -491,9 +518,10 @@ function PositionMoneyCard({
     const dec = (symbolDecisions as Record<string, { decision?: Record<string, unknown> }> | null)?.[sym]?.decision;
     const mark = n ? markForPosition(pos, row, dec ?? null) : null;
     const uPnL = n ? unrealizedUsdResolved(n, mark) : null;
-    const margin = n?.margin ?? null;
-    const equityUsd = margin !== null && uPnL !== null ? margin + uPnL : null;
-    const uPct = formatPctOnMargin(uPnL, margin);
+    const notionalUsd = n?.notionalUsd ?? null;
+    const marginUsd = n?.marginUsd ?? null;
+    const equityUsd = marginUsd !== null && uPnL !== null ? marginUsd + uPnL : null;
+    const uPct = formatPctOnMargin(uPnL, marginUsd);
     const hold = formatHoldShort(n?.openedAt ?? null);
     const uClass =
         uPnL === null ? "text-zinc-300" : uPnL >= 0 ? "text-emerald-400" : "text-rose-400";
@@ -511,7 +539,8 @@ function PositionMoneyCard({
     const exitProg =
         typeof pe === "number" && Number.isFinite(pe) ? `${Math.max(0, Math.min(3, Math.floor(pe)))}/3` : "기록 없음";
 
-    const marginStr = margin !== null ? formatCurrencyUsd(margin) : "기록 없음";
+    const notionalStr = notionalUsd !== null ? formatCurrencyUsd(notionalUsd) : "기록 없음";
+    const marginStr = marginUsd !== null ? formatCurrencyUsd(marginUsd) : "기록 없음";
     const equityStr = equityUsd !== null ? formatCurrencyUsd(equityUsd) : "기록 없음";
 
     return (
@@ -525,10 +554,11 @@ function PositionMoneyCard({
                 </div>
             </div>
 
-            <div className="mt-5 grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-6">
-                <MetricCell label="진입금액 (Margin)" value={marginStr} />
+            <div className="mt-5 grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-7">
+                <MetricCell label="진입금액 (USD)" value={notionalStr} />
+                <MetricCell label="증거금 (Margin)" value={marginStr} />
                 <MetricCell label="평가금액 (Equity)" value={equityStr} />
-                <MetricCell label="비중 (Weight %)" value={margin !== null ? ((margin / INITIAL_CAPITAL_USD) * 100).toFixed(1) + "%" : "기록 없음"} valueClass="text-amber-400/90" />
+                <MetricCell label="비중 (노출 %)" value={notionalUsd !== null ? ((notionalUsd / INITIAL_CAPITAL_USD) * 100).toFixed(1) + "%" : "기록 없음"} valueClass="text-amber-400/90" />
                 <MetricCell label="미실현 손익" value={formatSignedUsdDisplay(uPnL)} valueClass={uClass} />
                 <MetricCell label="수익률 %" value={uPct} valueClass={uClass} />
                 <MetricCell label="보유시간" value={hold} className="col-span-2 sm:col-span-1 lg:col-span-1" />
@@ -706,7 +736,9 @@ function RecentPerformanceSection({
                                             {formatSignedUsdDisplay(t.pnlUsdNet)}
                                         </td>
                                         <td className={`px-5 py-3.5 font-mono font-bold ${(t.pnlUsdNet || 0) >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
-                                            {t.pnlUsdNet !== null && t.initialSizeUsd ? formatPctOnMargin(t.pnlUsdNet, t.initialSizeUsd) : "기록 없음"}
+                                            {typeof t.realizedPnlPct === "number" && Number.isFinite(t.realizedPnlPct)
+                                                ? formatPercent(t.realizedPnlPct)
+                                                : formatPctOnMargin(t.pnlUsdNet ?? null, closedTradeMarginUsd(t as Record<string, unknown>))}
                                         </td>
                                         <td className="px-5 py-3.5">
                                             {(() => {
