@@ -3,8 +3,8 @@ import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 
 export const metadata: Metadata = {
-  title: "선물 페이퍼 모니터 · orbitalpha.kr",
-  description: "Bybit USDT 모의투자 운영 모니터"
+  title: "운영 모니터 · orbitalpha.kr",
+  description: "자동매매 상태 · 자산 · 포지션 현황"
 };
 
 const COOKIE_NAME = "homepage_admin_auth";
