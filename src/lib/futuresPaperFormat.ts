@@ -75,8 +75,36 @@ export function formatPrice(value: unknown, emptyLabel = "기록 없음"): strin
 export function formatDateTimeKst(ms: unknown, emptyLabel = "기록 없음"): string {
   if (typeof ms !== "number" || !Number.isFinite(ms)) return emptyLabel;
   try {
-    const s = new Date(ms).toLocaleString("sv-SE", { timeZone: KST_TZ });
-    return `${s.replace("T", " ")} KST`;
+    const parts = new Intl.DateTimeFormat("ko-KR", {
+      timeZone: KST_TZ,
+      year: "numeric",
+      month: "numeric",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hour12: false
+    }).formatToParts(new Date(ms));
+    const get = (type: Intl.DateTimeFormatPartTypes) => parts.find((p) => p.type === type)?.value ?? "";
+    return `${get("year")}년 ${get("month")}월 ${get("day")}일 ${get("hour")}시 ${get("minute")}분 ${get("second")}초 KST`;
+  } catch {
+    return emptyLabel;
+  }
+}
+
+export function formatDateTimeKstShort(ms: unknown, emptyLabel = "기록 없음"): string {
+  if (typeof ms !== "number" || !Number.isFinite(ms)) return emptyLabel;
+  try {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone: KST_TZ,
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false
+    }).formatToParts(new Date(ms));
+    const get = (type: Intl.DateTimeFormatPartTypes) => parts.find((p) => p.type === type)?.value ?? "";
+    return `${get("month")}/${get("day")} ${get("hour")}:${get("minute")} KST`;
   } catch {
     return emptyLabel;
   }
@@ -147,8 +175,8 @@ export function mapSignalLabel(signal: unknown): string {
 
 /** [NEW] 종료 사유 코드별 표시명 및 설명 사전 */
 const EXIT_REASON_MAP: Record<string, { label: string; desc: string }> = {
-  EXIT_SL: { label: "손절", desc: "손실 제한 기준 도달" },
-  EXIT_TP: { label: "익절", desc: "목표 수익 구간 도달" },
+  EXIT_SL: { label: "손절", desc: "손실 제한 조건에 도달해 종료했습니다." },
+  EXIT_TP: { label: "목표 수익 도달", desc: "목표 수익 조건을 충족해 종료했습니다." },
   EXIT_TP_1: { label: "1차 익절", desc: "1차 수익 목표 도달 및 비중 축소" },
   EXIT_TP_2: { label: "2차 익절", desc: "2차 수익 목표 도달 및 비중 축소" },
   EXIT_PARTIAL_TP: { label: "부분 익절", desc: "수익 분할 확보 완료" },
@@ -156,22 +184,25 @@ const EXIT_REASON_MAP: Record<string, { label: string; desc: string }> = {
   EXIT_TRAILING: { label: "트레일링 익절", desc: "수익 보존을 위한 트레일링 스탑 도달" },
   EXIT_TIME: { label: "시간 종료", desc: "최대 보유 시간 초과" },
   EXIT_TIME_STOP: { label: "시간 종료", desc: "최대 보유 시간 초과" },
-  EXIT_TREND_BREAK: { label: "추세 이탈", desc: "진입 당시 추세 조건이 훼손됨" },
-  EXIT_REGIME: { label: "장세 전환 종료", desc: "시장 상태 판단이 바뀌어 기존 포지션 종료" },
-  EXIT_REGIME_EXIT: { label: "장세 전환 종료", desc: "시장 상태 판단이 바뀌어 기존 포지션 종료" },
+  EXIT_TREND_BREAK: { label: "추세 이탈", desc: "추세 유지 조건이 깨져 포지션을 종료했습니다." },
+  EXIT_REGIME: { label: "장세 전환", desc: "시장 상태가 바뀌어 기존 포지션을 정리했습니다." },
+  EXIT_REGIME_EXIT: { label: "장세 전환", desc: "시장 상태가 바뀌어 기존 포지션을 정리했습니다." },
   EXIT_REGIME_BREAK: { label: "장세 전환 종료", desc: "구조적 시장 상태 변화 감지" },
-  EXIT_RANGE_REBALANCE: { label: "횡보 재조정 종료", desc: "횡보 구간 재균형 판단으로 기존 포지션 정리" },
+  EXIT_RANGE_REBALANCE: { label: "박스권 재조정", desc: "박스권 위치가 바뀌어 포지션을 정리했습니다." },
   EXIT_STRUCTURAL: { label: "구조 훼손 종료", desc: "시장 구조 훼손(박스 이탈 등)으로 인한 종료" },
-  EXIT_RISK: { label: "위험 관리 종료", desc: "위험 제어(변동성 급증 등)를 위한 대응 종료" },
+  EXIT_RISK: { label: "위험관리 종료", desc: "변동성 또는 리스크 조건에 따라 포지션을 종료했습니다." },
   EXIT_SWITCH: { label: "전략 전환 종료", desc: "반대 신호 발생으로 인한 포지션 스위칭" },
   EXIT_TREND_SWITCH: { label: "전략 전환 종료", desc: "추세 반전 판단에 따른 스위칭" },
-  EXIT_SIGNAL_LOST: { label: "진입 근거 약화", desc: "진입 당시 신호 근거가 소멸함" },
+  EXIT_SIGNAL_LOST: { label: "진입 근거 약화", desc: "진입 당시 신호가 약해져 포지션을 정리했습니다." },
   EXIT_CRASH_FORCE: { label: "급락 강제 청산", desc: "시장 급락 감지로 인한 안전 선제 청산" },
   EXIT_CRASH_REDUCE: { label: "급락 비중 축소", desc: "하락 압력 가중으로 인한 포지션 50% 축소" },
   EXIT_LONG_CRASH_FORCE: { label: "급락 롱 강제 종료", desc: "롱 포지션 보호를 위한 급락 강제 청산" },
   EXIT_LONG_CRASH_REDUCE: { label: "급락 롱 비중 축소", desc: "롱 포지션 위험 관리를 위한 50% 선제 축소" },
   EXIT_SHORT_MOMENTUM_TRAIL: { label: "급락 숏 수익 보호", desc: "급락 모멘텀을 수익 기회로 활용하며 트레일링 보호" },
   EXIT_UNKNOWN: { label: "기록 부족", desc: "명확한 종료 사유 기록 없음" },
+  CANDIDATE_LOST: { label: "진입 근거 약화", desc: "진입 당시 신호가 약해져 포지션을 정리했습니다." },
+  RISK_EXIT: { label: "위험관리 종료", desc: "변동성 또는 리스크 조건에 따라 포지션을 종료했습니다." },
+  RANGE_REBALANCE: { label: "박스권 재조정", desc: "박스권 위치가 바뀌어 포지션을 정리했습니다." },
 };
 
 /** [NEW] 종료 사유 포맷팅 */
@@ -250,7 +281,7 @@ export function formatExitStage(stage: unknown): string {
 }
 
 /**
- * [NEW] 종합 상태 해석 (카드 1 전용)
+ * 종합 상태 해석 (카드 1 전용)
  */
 export function interpretCurrentStatus(bundle: any): { label: string; sub: string } {
   const engine = bundle?.engineState;

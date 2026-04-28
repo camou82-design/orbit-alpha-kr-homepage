@@ -69,6 +69,29 @@ async function loadFromRemoteApi(baseUrl: string, secret: string): Promise<Futur
     return emptyBundle("Lightsail API response did not match the expected bundle shape.");
   }
   const b = json as FuturesPaperDataBundle;
+  const bAny = b as any;
+  const tradeControl =
+    bAny.tradeControl ??
+    (bAny.dashboard && typeof bAny.dashboard === "object" ? bAny.dashboard.tradeControl : null) ??
+    null;
+
+  // If control fields are missing, try fetching from the control status endpoint
+  if (bAny.serverTradeEnabled === undefined) {
+    try {
+      const controlUrl = `${root}/api/futures-paper/control`;
+      const controlRes = await fetch(controlUrl, {
+        headers: { [HEADER_TOKEN]: secret },
+        cache: "no-store"
+      });
+      if (controlRes.ok) {
+        const controlJson = await controlRes.json();
+        Object.assign(bAny, controlJson);
+      }
+    } catch (e) {
+      console.warn("[futures-paper] Failed to fetch secondary control status", e);
+    }
+  }
+
   const withDefaults: FuturesPaperDataBundle = {
     ...b,
     summaryRange: (b as any).summaryRange ?? null,
@@ -81,6 +104,13 @@ async function loadFromRemoteApi(baseUrl: string, secret: string): Promise<Futur
     generatedAt:
       typeof (b as any).generatedAt === "number" && Number.isFinite((b as any).generatedAt) ? ((b as any).generatedAt as number) : Date.now()
   };
+  if (tradeControl && typeof tradeControl === "object") {
+    (withDefaults as any).tradeControl = tradeControl;
+    (withDefaults as any).serverTradeEnabled = (withDefaults as any).serverTradeEnabled ?? tradeControl.serverTradeEnabled;
+    (withDefaults as any).closeOnlyMode = (withDefaults as any).closeOnlyMode ?? tradeControl.closeOnlyMode;
+    (withDefaults as any).killSwitch = (withDefaults as any).killSwitch ?? tradeControl.killSwitch;
+    (withDefaults as any).trade_control_updated_at = (withDefaults as any).trade_control_updated_at ?? tradeControl.updatedAt;
+  }
   return withDefaults;
 }
 

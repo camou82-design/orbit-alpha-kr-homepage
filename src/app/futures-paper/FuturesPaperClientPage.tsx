@@ -8,6 +8,7 @@ import {
     formatCount,
     formatCurrencyUsd,
     formatDateTimeKst,
+    formatDateTimeKstShort,
     formatPercent,
     formatPrice,
     describeSnapshotContext,
@@ -57,6 +58,12 @@ type Bundle = {
     openPositions?: Array<Record<string, unknown>>;
     eventsRecent?: Array<Record<string, unknown>>;
     positionsHistory?: Array<Record<string, any>>;
+    // Control states
+    serverTradeEnabled?: boolean;
+    closeOnlyMode?: boolean;
+    killSwitch?: boolean;
+    trade_control_updated_at?: number;
+    trade_control_source?: string;
 };
 
 type NormPos = {
@@ -249,6 +256,22 @@ function formatUsdSignified(v: number | null): string {
     return (v >= 0 ? "+" : "−") + "$" + Math.abs(v).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
+function toMainKrwSubUsd(usd: number, rate: number) {
+    return {
+        krw: formatKrw(usd * rate),
+        usd: `약 $${usd.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+    };
+}
+
+function toSignedMainKrwSubUsd(usd: number, rate: number) {
+    const sign = usd > 0 ? "+" : usd < 0 ? "-" : "";
+    const abs = Math.abs(usd);
+    return {
+        krw: `${sign}${formatKrw(abs * rate)}`,
+        usd: `약 ${sign}$${abs.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+    };
+}
+
 /** Components */
 
 function HeroMetric({
@@ -289,33 +312,33 @@ function AccountOverviewSection({
 
     return (
         <section className="space-y-4">
-            <h2 className="text-xs font-bold uppercase tracking-widest text-zinc-500">계좌 개요 (Account Overview)</h2>
+            <h2 className="text-xs font-bold uppercase tracking-widest text-zinc-500">계정 개요</h2>
             <div className="grid gap-4 md:grid-cols-3">
                 <div className="rounded-xl border border-zinc-800 bg-zinc-900/40 p-5 shadow-sm">
-                    <p className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">현재 자산 (Current)</p>
+                    <p className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">현재 평가 자산</p>
                     <div className="mt-2 flex items-baseline gap-2">
                         <span className="text-2xl font-black text-zinc-100">{formatKrw(totalAssetsKrw)}</span>
-                        <span className="text-sm font-medium text-zinc-400">≈ {formatCurrencyUsd(totalAssetsUsdt)}</span>
+                        <span className="text-sm font-medium text-zinc-400">약 ${totalAssetsUsdt.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                     </div>
-                    <p className="mt-1 text-[10px] text-zinc-600">기준 환율: 1 USDT ≈ {formatKrw(usdkrwRate)}</p>
+                    <p className="mt-1 text-[10px] text-zinc-600">기준 환율: 1 <span className="notranslate" translate="no">USDT</span> = {formatKrw(usdkrwRate)}</p>
                 </div>
 
                 <div className="rounded-xl border border-zinc-800 bg-zinc-900/40 p-5 shadow-sm">
-                    <p className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">초기 자산 (Initial)</p>
+                    <p className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">초기 기준 자산</p>
                     <div className="mt-2 flex items-baseline gap-2">
                         <span className="text-2xl font-black text-zinc-400">{formatKrw(ledger.initialCapitalKrw)}</span>
-                        <span className="text-sm font-medium text-zinc-400">≈ {formatCurrencyUsd(ledger.initialCapitalUsd)}</span>
+                        <span className="text-sm font-medium text-zinc-400">약 ${ledger.initialCapitalUsd.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                     </div>
                 </div>
 
                 <div className="rounded-xl border border-zinc-800 bg-zinc-900/40 p-5 shadow-sm">
-                    <p className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">누적 실현 성과 (Net)</p>
+                    <p className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">누적 실현 손익</p>
                     <div className="mt-2 flex items-baseline gap-2">
                         <span className={`text-2xl font-black ${ledger.totalRealizedPnlUsd >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
-                            {formatUsdSignified(ledger.totalRealizedPnlUsd)}
+                            {toSignedMainKrwSubUsd(ledger.totalRealizedPnlUsd, usdkrwRate).krw}
                         </span>
                         <span className={`text-sm font-medium ${ledger.roiPct >= 0 ? "text-emerald-500" : "text-rose-500"}`}>
-                            ({formatPercent(ledger.roiPct, "0%")} ROI)
+                            {toSignedMainKrwSubUsd(ledger.totalRealizedPnlUsd, usdkrwRate).usd} · ROI {formatPercent(ledger.roiPct, "0%")}
                         </span>
                     </div>
                 </div>
@@ -367,14 +390,14 @@ function ExposureSection({
                         return (
                             <div key={sym} className="flex items-center gap-2">
                                 <div className={`h-2 w-2 rounded-full ${sym === "BTCUSDT" ? "bg-amber-500" : "bg-blue-500"}`} />
-                                <span className="text-[10px] font-bold text-zinc-400">{sym}</span>
+                        <span className="text-[10px] font-bold text-zinc-400 notranslate" translate="no">{sym}</span>
                                 <span className="text-xs font-mono text-zinc-200">{pct.toFixed(1)}%</span>
                             </div>
                         );
                     })}
                     <div className="flex items-center gap-2">
                         <div className="h-2 w-2 rounded-full bg-zinc-800" />
-                        <span className="text-[10px] font-bold text-zinc-400">IDLE CAPITAL</span>
+                        <span className="text-[10px] font-bold text-zinc-400">미사용 자산</span>
                         <span className="text-xs font-mono text-zinc-500">{(100 - exposurePct).toFixed(1)}%</span>
                     </div>
                 </div>
@@ -539,15 +562,11 @@ function PositionMoneyCard({
     const exitProg =
         typeof pe === "number" && Number.isFinite(pe) ? `${Math.max(0, Math.min(3, Math.floor(pe)))}/3` : "기록 없음";
 
-    const notionalStr = notionalUsd !== null ? formatCurrencyUsd(notionalUsd) : "기록 없음";
-    const marginStr = marginUsd !== null ? formatCurrencyUsd(marginUsd) : "기록 없음";
-    const equityStr = equityUsd !== null ? formatCurrencyUsd(equityUsd) : "기록 없음";
-
     return (
         <div className="rounded-xl border border-emerald-500/20 bg-emerald-950/5 p-5 shadow-[0_0_20px_rgba(16,185,129,0.05)] ring-1 ring-emerald-500/10">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                 <div className="font-mono text-xl font-black flex items-center gap-3">
-                    <span className="text-zinc-100">{sym}</span>
+                    <span className="text-zinc-100 notranslate" translate="no">{sym}</span>
                     <span className={`rounded-md px-2 py-0.5 text-xs ring-1 ${pos.side === "short" ? "bg-rose-950/30 text-rose-400 ring-rose-500/40" : "bg-emerald-950/30 text-emerald-400 ring-emerald-500/40"}`}>
                         {side}
                     </span>
@@ -555,22 +574,22 @@ function PositionMoneyCard({
             </div>
 
             <div className="mt-5 grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-7">
-                <MetricCell label="진입금액 (USD)" value={notionalStr} />
-                <MetricCell label="증거금 (Margin)" value={marginStr} />
-                <MetricCell label="평가금액 (Equity)" value={equityStr} />
+                <MetricCell label="진입금액" value={notionalUsd !== null ? toMainKrwSubUsd(notionalUsd, USDKRW_RATE).krw : "기록 없음"} />
+                <MetricCell label="증거금" value={marginUsd !== null ? toMainKrwSubUsd(marginUsd, USDKRW_RATE).krw : "기록 없음"} />
+                <MetricCell label="평가금액" value={equityUsd !== null ? toMainKrwSubUsd(equityUsd, USDKRW_RATE).krw : "기록 없음"} />
                 <MetricCell label="비중 (노출 %)" value={notionalUsd !== null ? ((notionalUsd / INITIAL_CAPITAL_USD) * 100).toFixed(1) + "%" : "기록 없음"} valueClass="text-amber-400/90" />
-                <MetricCell label="미실현 손익" value={formatSignedUsdDisplay(uPnL)} valueClass={uClass} />
+                <MetricCell label="미실현 손익" value={uPnL !== null ? toSignedMainKrwSubUsd(uPnL, USDKRW_RATE).krw : "기록 없음"} valueClass={uClass} />
                 <MetricCell label="수익률 %" value={uPct} valueClass={uClass} />
                 <MetricCell label="보유시간" value={hold} className="col-span-2 sm:col-span-1 lg:col-span-1" />
             </div>
 
             <div className="mt-6 grid grid-cols-2 gap-x-4 gap-y-3 border-t border-zinc-800/50 pt-5 text-sm sm:grid-cols-3 lg:grid-cols-5">
                 <div>
-                    <p className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">평균 진입가</p>
+                    <p className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">진입가</p>
                     <p className="mt-1 font-mono tabular-nums text-zinc-200">{entryDisp}</p>
                 </div>
                 <div>
-                    <p className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">현재가 (MARK)</p>
+                    <p className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">현재가</p>
                     <p className="mt-1 font-mono tabular-nums text-amber-200/90">{markDisp}</p>
                 </div>
                 <div>
@@ -637,7 +656,7 @@ function SymbolStatusCard({
     return (
         <div className="rounded-xl border border-zinc-800 bg-zinc-900/40 p-5 shadow-sm">
             <div className="flex items-center justify-between">
-                <div className="font-mono text-xl font-black text-amber-200">{sym}</div>
+                <div className="font-mono text-xl font-black text-amber-200 notranslate" translate="no">{sym}</div>
                 <div
                     className={`rounded-full px-2.5 py-0.5 text-[10px] font-bold ring-1 transition-all ${rep.label === "포지션 보유 중" ? "bg-emerald-950/30 text-emerald-400 ring-emerald-500/50" :
                         rep.label === "진입 검토 중" ? "bg-amber-950/30 text-amber-400 ring-amber-500/50" :
@@ -692,9 +711,9 @@ function RecentPerformanceSection({
                 <h2 className="text-xs font-bold uppercase tracking-widest text-zinc-500">최근 실적 및 종료 이력</h2>
             </div>
             <div className="grid gap-3 grid-cols-2 sm:grid-cols-3 lg:grid-cols-5">
-                <MetricCell label="최근 24시간 손익" value={pnl24h !== null ? formatSignedUsdDisplay(pnl24h) : "기록 없음"} valueClass={pnl24h === null ? "" : pnl24h >= 0 ? "text-emerald-400" : "text-rose-400"} />
-                <MetricCell label="최근 7일 손익" value={formatSignedUsdDisplay(w7?.totalPnlUsdNet ?? null)} valueClass={(w7?.totalPnlUsdNet ?? 0) >= 0 ? "text-emerald-400" : "text-rose-400"} />
-                <MetricCell label="최근 30일 손익" value={formatSignedUsdDisplay(w30?.totalPnlUsdNet ?? null)} valueClass={(w30?.totalPnlUsdNet ?? 0) >= 0 ? "text-emerald-400" : "text-rose-400"} />
+                <MetricCell label="최근 24시간 손익" value={pnl24h !== null ? toSignedMainKrwSubUsd(pnl24h, USDKRW_RATE).krw : "기록 없음"} valueClass={pnl24h === null ? "" : pnl24h >= 0 ? "text-emerald-400" : "text-rose-400"} />
+                <MetricCell label="최근 7일 손익" value={toSignedMainKrwSubUsd(w7?.totalPnlUsdNet ?? 0, USDKRW_RATE).krw} valueClass={(w7?.totalPnlUsdNet ?? 0) >= 0 ? "text-emerald-400" : "text-rose-400"} />
+                <MetricCell label="최근 30일 손익" value={toSignedMainKrwSubUsd(w30?.totalPnlUsdNet ?? 0, USDKRW_RATE).krw} valueClass={(w30?.totalPnlUsdNet ?? 0) >= 0 ? "text-emerald-400" : "text-rose-400"} />
                 <MetricCell label="최근 7일 승률" value={formatPercent(w7?.winRate ?? null)} />
                 <MetricCell label="최근 종료 거래 수" value={formatCount(w7?.totalTrades ?? 0) + "건"} />
             </div>
@@ -724,7 +743,7 @@ function RecentPerformanceSection({
                             ) : (
                                 last5.map((t, i) => (
                                     <tr key={i} className="hover:bg-zinc-800/30 transition-colors">
-                                        <td className="px-5 py-3.5 font-mono font-bold text-zinc-100">{t.symbol}</td>
+                                        <td className="px-5 py-3.5 font-mono font-bold text-zinc-100 notranslate" translate="no">{t.symbol}</td>
                                         <td className="px-5 py-3.5">
                                             <span className={`rounded px-1.5 py-0.5 text-[10px] font-bold ${t.side === "short" ? "bg-rose-950/30 text-rose-400 ring-1 ring-rose-500/30" : "bg-emerald-950/30 text-emerald-400 ring-1 ring-emerald-500/30"}`}>
                                                 {t.side === "short" ? "숏" : "롱"}
@@ -733,7 +752,8 @@ function RecentPerformanceSection({
                                         <td className="px-5 py-3.5 font-mono text-zinc-300">{formatPrice(t.entryPrice)}</td>
                                         <td className="px-5 py-3.5 font-mono text-zinc-300">{formatPrice(t.exitPrice)}</td>
                                         <td className={`px-5 py-3.5 font-mono font-bold ${(t.pnlUsdNet || 0) >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
-                                            {formatSignedUsdDisplay(t.pnlUsdNet)}
+                                            {toSignedMainKrwSubUsd(t.pnlUsdNet || 0, USDKRW_RATE).krw}
+                                            <div className="text-[10px] font-normal text-zinc-500">{toSignedMainKrwSubUsd(t.pnlUsdNet || 0, USDKRW_RATE).usd}</div>
                                         </td>
                                         <td className={`px-5 py-3.5 font-mono font-bold ${(t.pnlUsdNet || 0) >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
                                             {typeof t.realizedPnlPct === "number" && Number.isFinite(t.realizedPnlPct)
@@ -746,7 +766,7 @@ function RecentPerformanceSection({
                                                 return (
                                                     <div className="flex flex-col">
                                                         <span className="font-bold text-zinc-100">{label}</span>
-                                                        <span className="text-[10px] text-zinc-500">{desc} ({code})</span>
+                                                        <span className="text-[10px] text-zinc-500">{desc}</span>
                                                     </div>
                                                 );
                                             })()}
@@ -770,7 +790,7 @@ function LastClosedSummaryCard({ trade }: { trade: any }) {
 
     return (
         <section className="space-y-3">
-            <h2 className="text-xs font-bold uppercase tracking-widest text-zinc-500">직전 종료 요약</h2>
+            <h2 className="text-xs font-bold uppercase tracking-widest text-zinc-500">최근 종료 요약</h2>
             <div className="rounded-xl border border-zinc-800 bg-zinc-900/60 p-4 ring-1 ring-zinc-800/50 shadow-lg" >
                 <div className="flex flex-wrap items-center justify-between gap-4">
                     <div className="flex items-center gap-4">
@@ -788,7 +808,7 @@ function LastClosedSummaryCard({ trade }: { trade: any }) {
                                     <div className="mt-1">
                                         <div className="flex items-baseline gap-2">
                                             <span className="text-sm font-bold text-zinc-100">{label}</span>
-                                            <span className="text-[10px] text-zinc-500 uppercase">{code}</span>
+                                            <span className="text-[10px] text-zinc-500 uppercase notranslate" translate="no">{code}</span>
                                         </div>
                                         <p className="text-[10px] text-zinc-400">{desc}</p>
                                     </div>
@@ -797,7 +817,8 @@ function LastClosedSummaryCard({ trade }: { trade: any }) {
                         </div>
                         <div>
                             <p className="text-[10px] font-bold uppercase tracking-wider text-zinc-500">실현 손익</p>
-                            <p className={`mt-1 font-mono text-sm font-black ${pnlClass}`}>{formatSignedUsdDisplay(trade.pnlUsdNet)}</p>
+                            <p className={`mt-1 font-mono text-sm font-black ${pnlClass}`}>{toSignedMainKrwSubUsd(trade.pnlUsdNet || 0, USDKRW_RATE).krw}</p>
+                            <p className="text-[10px] text-zinc-500">{toSignedMainKrwSubUsd(trade.pnlUsdNet || 0, USDKRW_RATE).usd}</p>
                         </div>
                         <div>
                             <p className="text-[10px] font-bold uppercase tracking-wider text-zinc-500">종료 시각</p>
@@ -816,12 +837,101 @@ function LastClosedSummaryCard({ trade }: { trade: any }) {
     );
 }
 
+function OperatorControlSection({
+    bundle,
+    onAction,
+    isProcessing
+}: {
+    bundle: Bundle;
+    onAction: (action: string, params?: any) => Promise<void>;
+    isProcessing: boolean;
+}) {
+    const tradeControl =
+        (bundle as any).tradeControl ??
+        (bundle.dashboard && typeof bundle.dashboard === "object"
+            ? (bundle.dashboard as any).tradeControl
+            : null) ??
+        (bundle.engineState ?? null);
+    const tradeEnabled = (bundle.serverTradeEnabled ?? tradeControl?.serverTradeEnabled ?? false) === true;
+    const closeOnly = (bundle.closeOnlyMode ?? tradeControl?.closeOnlyMode ?? false) === true;
+    const killActive = (bundle.killSwitch ?? tradeControl?.killSwitch ?? false) === true;
+    const updatedAt = coerceFinite(bundle.trade_control_updated_at ?? tradeControl?.updatedAt);
+    const reason = String(tradeControl?.reason ?? "기록 없음");
+    const entryStatus = tradeEnabled && !closeOnly && !killActive ? "가능" : "차단";
+
+    return (
+        <section className="space-y-4">
+            <h2 className="text-xs font-bold uppercase tracking-widest text-zinc-500">운영 제어</h2>
+            <div className="rounded-xl border border-zinc-800 bg-zinc-900/40 p-5 shadow-sm">
+                <div className="flex flex-wrap items-center justify-between gap-6">
+                    <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                        <div className="min-w-[120px]">
+                            <p className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">자동매매 상태</p>
+                            <div className="mt-2 flex items-center gap-2">
+                                <div className={`h-2 w-2 rounded-full ${tradeEnabled ? "bg-emerald-500 animate-pulse shadow-[0_0_8px_rgba(16,185,129,0.5)]" : "bg-rose-500"}`} />
+                                <span className={`text-lg font-black ${tradeEnabled ? "text-emerald-400" : "text-rose-400"}`}>
+                                    {tradeEnabled ? "자동매매 ON" : "자동매매 OFF"}
+                                </span>
+                            </div>
+                        </div>
+                        <div>
+                            <p className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">신규 진입</p>
+                            <p className={`mt-2 text-lg font-black ${entryStatus === "가능" ? "text-emerald-400" : "text-rose-400"}`}>
+                                {entryStatus}
+                            </p>
+                        </div>
+                        <div>
+                            <p className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">청산 전용</p>
+                            <p className={`mt-2 text-lg font-black ${closeOnly ? "text-amber-400" : "text-zinc-500"}`}>
+                                {closeOnly ? "ON" : "OFF"}
+                            </p>
+                        </div>
+                        <div>
+                            <p className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">킬스위치</p>
+                            <p className={`mt-2 text-lg font-black ${killActive ? "text-rose-500" : "text-zinc-500"}`}>
+                                {killActive ? "ON" : "OFF"}
+                            </p>
+                        </div>
+                    </div>
+
+                    <div className="flex flex-wrap gap-2">
+                        <button
+                            disabled={isProcessing || tradeEnabled}
+                            onClick={() => onAction("SET_TRADE", { enabled: true })}
+                            className={`rounded-lg px-4 py-2 text-xs font-bold transition-all ${tradeEnabled ? "bg-zinc-800 text-zinc-600 cursor-not-allowed" : "bg-emerald-600 text-white hover:bg-emerald-500 shadow-[0_0_15px_rgba(16,185,129,0.15)]"}`}
+                        >
+                            자동매매 ON
+                        </button>
+                        <button
+                            disabled={isProcessing || !tradeEnabled}
+                            onClick={() => onAction("SET_TRADE", { enabled: false })}
+                            className={`rounded-lg px-4 py-2 text-xs font-bold transition-all ${!tradeEnabled ? "bg-zinc-800 text-zinc-600 cursor-not-allowed" : "bg-rose-600 text-white hover:bg-rose-500 shadow-[0_0_15px_rgba(239,68,68,0.15)]"}`}
+                        >
+                            자동매매 OFF
+                        </button>
+
+                    </div>
+                </div>
+
+                <div className="mt-6 flex items-center justify-between border-t border-zinc-800/50 pt-4 text-[10px] text-zinc-500">
+                    <div className="flex flex-col gap-1">
+                        {updatedAt && <span>마지막 변경 시각: <span className="font-mono text-zinc-300">{formatDateTimeKst(updatedAt)}</span></span>}
+                        <span>변경 사유: <span className="text-zinc-300">{reason}</span></span>
+                    </div>
+                    {isProcessing && <span className="animate-pulse text-amber-500 font-bold uppercase">명령 전송 중...</span>}
+                </div>
+            </div>
+        </section>
+    );
+}
+
 export default function FuturesPaperClientPage({ initialBundle }: { initialBundle: Bundle }) {
     const [bundle, setBundle] = useState<Bundle>(initialBundle);
     const [err, setErr] = useState<string | null>(null);
     const [isRefreshing, setIsRefreshing] = useState(false);
     const [lastUpdated, setLastUpdated] = useState<Date>(new Date());
     const [showInternalTags, setShowInternalTags] = useState(false);
+    const [isProcessingControl, setIsProcessingControl] = useState(false);
 
     const refreshData = async () => {
         setIsRefreshing(true);
@@ -846,6 +956,27 @@ export default function FuturesPaperClientPage({ initialBundle }: { initialBundl
         return () => clearInterval(interval);
     }, []);
 
+    const handleControlAction = async (action: string, params: any = {}) => {
+        setIsProcessingControl(true);
+        try {
+            const res = await fetch("/api/futures-paper/control", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ action, ...params })
+            });
+            if (!res.ok) {
+                const j = await res.json();
+                throw new Error(j.error || `HTTP ${res.status}`);
+            }
+            // After successful control, immediate refresh
+            await refreshData();
+        } catch (e) {
+            alert(`제어 실패: ${e instanceof Error ? e.message : String(e)}`);
+        } finally {
+            setIsProcessingControl(false);
+        }
+    };
+
     const perf = bundle?.ledgerPerformance ?? null;
     const history = Array.isArray(bundle?.positionsHistory) ? bundle.positionsHistory : [];
     const lastClosed = history.length > 0 ? history[history.length - 1] : null;
@@ -862,18 +993,18 @@ export default function FuturesPaperClientPage({ initialBundle }: { initialBundl
     const ledger = computeLedgerPerformanceFromHistory(history);
 
     return (
-        <div className="min-h-screen bg-zinc-950 text-zinc-100">
+        <div className="min-h-screen bg-zinc-950 text-zinc-100" lang="ko" translate="no">
             <header className="border-b border-zinc-800 bg-zinc-900/80 px-4 py-3">
                 <div className="mx-auto flex max-w-5xl flex-wrap items-center justify-between gap-2">
                     <div className="flex items-center gap-4">
                         <div>
                             <h1 className="text-lg font-semibold tracking-tight">선물 페이퍼 모니터</h1>
-                            <p className="text-xs text-zinc-500">Bybit USDT · 모의 · 읽기 전용</p>
+                            <p className="text-xs text-zinc-500"><span className="notranslate" translate="no">Bybit USDT</span> · 모의투자 · 운영 모니터</p>
                         </div>
                         <div className="hidden border-l border-zinc-700 pl-4 sm:block">
                             <p className="text-[10px] font-medium uppercase tracking-wider text-zinc-500">마지막 갱신</p>
                             <p className="text-[10px] text-zinc-400">
-                                {lastUpdated.toLocaleTimeString("ko-KR")}
+                                {formatDateTimeKstShort(lastUpdated.getTime())}
                                 {isRefreshing && <span className="ml-2 animate-pulse text-amber-400">갱신 중...</span>}
                             </p>
                         </div>
@@ -881,7 +1012,7 @@ export default function FuturesPaperClientPage({ initialBundle }: { initialBundl
                     <div className="flex items-center gap-3">
                         <div className="flex items-center gap-2 rounded-full bg-zinc-800/50 px-3 py-1 ring-1 ring-zinc-700/50">
                             <div className={`h-1.5 w-1.5 rounded-full ${isRefreshing ? "animate-ping bg-amber-400" : "bg-emerald-500"}`} />
-                            <span className="text-[10px] font-bold text-zinc-400">AUTO: 5s</span>
+                            <span className="text-[10px] font-bold text-zinc-400">자동 갱신: 5초</span>
                         </div>
                         <Link href="/" className="text-sm text-amber-400/90 hover:text-amber-300">
                             ← orbitalpha.kr
@@ -900,46 +1031,54 @@ export default function FuturesPaperClientPage({ initialBundle }: { initialBundl
 
                 {bundle?.configured ? (
                     <>
+                        {/* ROW 0: Operator Control */}
+                        <OperatorControlSection
+                            bundle={bundle}
+                            onAction={handleControlAction}
+                            isProcessing={isProcessingControl}
+                        />
+
                         {/* ROW 1: Hero Metrics */}
                         <section className="grid grid-cols-2 gap-4 lg:grid-cols-4">
                             <HeroMetric
-                                label="현재 운용자산 (Current)"
+                                label="현재 평가 자산"
                                 value={formatKrw(ledger.currentCapitalKrw)}
-                                subValue={`≈ ${formatCurrencyUsd(ledger.currentCapitalUsd)}`}
+                                subValue={`약 $${ledger.currentCapitalUsd.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
                                 valueClass="text-amber-400"
                             />
                             <HeroMetric
-                                label="누적 실현손익 (Total Net)"
-                                value={formatSignedUsdDisplay(ledger.totalRealizedPnlUsd)}
-                                subValue={`${formatPercent(ledger.roiPct)} ROI`}
+                                label="누적 실현 손익"
+                                value={toSignedMainKrwSubUsd(ledger.totalRealizedPnlUsd, USDKRW_RATE).krw}
+                                subValue={`${toSignedMainKrwSubUsd(ledger.totalRealizedPnlUsd, USDKRW_RATE).usd} · ROI ${formatPercent(ledger.roiPct)}`}
                                 valueClass={ledger.totalRealizedPnlUsd >= 0 ? "text-emerald-400" : "text-rose-400"}
                             />
                             <HeroMetric
-                                label="현재 미실현 손익 (Unreal)"
-                                value={formatSignedUsdDisplay(pm.totalUnreal)}
+                                label="현재 미실현 손익"
+                                value={toSignedMainKrwSubUsd(pm.totalUnreal, USDKRW_RATE).krw}
+                                subValue={toSignedMainKrwSubUsd(pm.totalUnreal, USDKRW_RATE).usd}
                                 valueClass={pm.totalUnreal >= 0 ? "text-emerald-400" : "text-rose-400"}
                             />
-                            <HeroMetric label="보유 포지션 / 총 거래" value={`${pm.openCount}건 / ${formatCount(ledger.tradeCount)}건`} />
+                            <HeroMetric label="포지션 / 거래" value={`보유 ${pm.openCount}건 / 종료 ${formatCount(ledger.tradeCount)}건`} />
                         </section>
 
-                        {/* ROW 2: Account Overview */}
+                        {/* ROW 2 */}
                         <AccountOverviewSection pm={pm} perf={perf} usdkrwRate={USDKRW_RATE} ledger={ledger} />
 
-                        {/* ROW 3: Current Positions */}
+                        {/* ROW 3 */}
                         <section className="space-y-4">
                             <div className="flex items-center justify-between">
-                                <h2 className="text-xs font-bold uppercase tracking-widest text-zinc-500">현재 포지션 (Current Positions)</h2>
+                                <h2 className="text-xs font-bold uppercase tracking-widest text-zinc-500">현재 포지션</h2>
                                 <button
                                     onClick={() => setShowInternalTags(!showInternalTags)}
                                     className="rounded bg-zinc-800 px-3 py-1.5 text-[10px] font-bold text-zinc-400 transition-colors hover:bg-zinc-700 hover:text-zinc-200"
                                 >
-                                    {showInternalTags ? "Detail View On" : "Detail View Off"}
+                                    {showInternalTags ? "상세 보기 켜짐" : "상세 보기 꺼짐"}
                                 </button>
                             </div>
                             <div className="space-y-4">
                                 {openPositions.length === 0 ? (
                                     <div className="flex h-32 items-center justify-center rounded-xl border border-dashed border-zinc-800 bg-zinc-900/20 text-sm italic text-zinc-600">
-                                        현재 열려 있는 포지션이 없습니다.
+                                        현재 보유 중인 포지션이 없습니다.
                                     </div>
                                 ) : (
                                     openPositions.map((p, i) => (
@@ -987,21 +1126,21 @@ export default function FuturesPaperClientPage({ initialBundle }: { initialBundl
                         {/* ROW 7: Recent Performance & History */}
                         <RecentPerformanceSection perf={perf} history={history} />
 
-                        {/* BOTTOM: Operator / Developer Details */}
+                        {/* BOTTOM: Operator Details */}
                         <details className="group mt-12 overflow-hidden rounded-xl border border-zinc-800 bg-zinc-900/10">
                             <summary className="flex cursor-pointer list-none items-center justify-between px-6 py-4 text-xs font-bold uppercase tracking-widest text-zinc-500 transition-colors hover:bg-zinc-800/30">
                                 <div className="flex items-center gap-2">
                                     <div className="h-1.5 w-1.5 rounded-full bg-amber-500/50" />
-                                    운영자 / 개발자용 상세 실시간 분석
+                                    운영 상세 분석
                                 </div>
                                 <span className="text-[10px] text-zinc-600 transition-transform group-open:rotate-180">▲</span>
                             </summary>
                             <div className="space-y-8 border-t border-zinc-800/50 p-6">
                                 <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-                                    <MetricCell label="현재 레짐 (Regime)" value={String(curRegime || "기록 없음")} valueClass="text-amber-200" />
-                                    <MetricCell label="실행기 (Executor)" value={String(executor || "기록 없음")} />
-                                    <MetricCell label="위험 상태 (Risk)" value={String(riskState || "기록 없음")} />
-                                    <MetricCell label="엔진 상태 (Status)" value={String(bundle?.engineState?.engine_status || "기록 없음")} />
+                                    <MetricCell label="현재 장세" value={String(curRegime || "기록 없음")} valueClass="text-amber-200" />
+                                    <MetricCell label="실행 모드" value={String(executor || "기록 없음")} />
+                                    <MetricCell label="위험 상태" value={String(riskState || "기록 없음")} />
+                                    <MetricCell label="엔진 상태" value={String((bundle?.engineState as any)?.engine_status || "기록 없음")} />
                                 </div>
                             </div>
                         </details>
