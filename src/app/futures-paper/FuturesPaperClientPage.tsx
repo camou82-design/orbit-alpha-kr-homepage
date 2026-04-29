@@ -290,20 +290,25 @@ function HeroMetric({
     label,
     value,
     subValue,
+    smallSubValue,
     valueClass
 }: {
     label: string;
     value: string;
     subValue?: string;
+    smallSubValue?: string;
     valueClass?: string;
 }) {
     return (
-        <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-            <p className={`text-2xl font-black tabular-nums tracking-tighter sm:text-3xl ${valueClass ?? "text-slate-900"}`}>
-                {value}
-            </p>
-            {subValue && <p className="mt-1 text-[11px] font-bold text-slate-400">{subValue}</p>}
-            <p className="mt-2 text-[10px] font-extrabold uppercase tracking-widest text-slate-300">{label}</p>
+        <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm flex flex-col justify-between">
+            <div>
+                <p className={`text-2xl font-black tabular-nums tracking-tighter sm:text-3xl ${valueClass ?? "text-slate-900"}`}>
+                    {value}
+                </p>
+                {subValue && <p className="mt-1 text-[11px] font-bold text-slate-400">{subValue}</p>}
+                {smallSubValue && <p className="mt-0.5 text-[9px] font-medium text-slate-300">{smallSubValue}</p>}
+            </div>
+            <p className="mt-3 text-[10px] font-extrabold uppercase tracking-widest text-slate-300">{label}</p>
         </div>
     );
 }
@@ -733,12 +738,25 @@ function OperatorControlSection({
                         </div>
                         <div>
                             <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">신규 진입</p>
-                            <p className={`mt-1.5 text-sm font-bold ${entryReady ? "text-emerald-600" : "text-rose-500"}`}>
-                                {entryReady ? "신규 진입 가능" : "신규 진입 제한"}
-                            </p>
-                            {entryReasons.length > 0 && (
-                                <p className="mt-1 max-w-64 text-[10px] text-slate-500">{entryReasons.join(" · ")}</p>
-                            )}
+                            <div className="mt-1.5 flex flex-col gap-0.5">
+                                <span className={`text-sm font-bold ${
+                                    (!tradeEnabled || killActive || closeOnly) ? "text-rose-500" : 
+                                    entryReady ? "text-emerald-600" : "text-slate-500"
+                                }`}>
+                                    {(!tradeEnabled || killActive || closeOnly) ? "신규 진입 중지" : 
+                                     entryReady ? "신규 진입 가능" : "진입 대기"}
+                                </span>
+                                {entryReasons.length > 0 && (
+                                    <p className="max-w-64 text-[10px] text-slate-400 font-medium">
+                                        {entryReasons.map(r => {
+                                            if (r === "WAIT_RECHECK") return "V2 구조 확인 중";
+                                            if (r === "STRUCTURE_NOT_READY") return "V2 구조 확인 중";
+                                            if (r === "TRANSITION_RANGE_TO_TREND") return "V2 구조 확인 중";
+                                            return r;
+                                        }).join(" · ")}
+                                    </p>
+                                )}
+                            </div>
                         </div>
                         {closeOnly && (
                             <div>
@@ -868,39 +886,57 @@ export default function FuturesPaperClientPage({ initialBundle }: { initialBundl
     const okx = (bundle.dashboard as any)?.okx_balance;
     const isOkxLive = okx?.okx_balance_source === "okx_live_wallet" && okx?.okx_balance_fresh === true;
 
-    let mainAssetDisplay = assetDisplaySource === "unavailable" ? "실잔고 확인 불가" : assetDisplayKrw !== null ? formatKrw(assetDisplayKrw) : "-";
-    let mainAssetSub = assetDisplayLabel ? `${sourceLabel} · ${assetDisplayLabel}` : sourceLabel;
-
+    // 1번 카드: 현재 평가 자산 (OKX 실계좌 우선)
+    let mainAssetDisplay = "-";
+    let mainAssetSub = "내부 추정값";
+    let mainAssetSmallSub = "";
+    
     if (isOkxLive) {
         const eq = coerceFinite(okx.okx_total_equity_usdt);
         if (eq !== null) {
             mainAssetDisplay = `${eq.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USDT`;
-            const krwApprox = Math.floor(eq * 1000);
-            let sub = `약 ${formatKrw(krwApprox)} · OKX 실계좌`;
+            const krwApprox = Math.floor(eq * USDKRW_RATE);
+            mainAssetSub = `약 ${formatKrw(krwApprox)} · OKX 실계좌`;
             if (okx.okx_balance_error === "AVAILABLE_FIELD_FALLBACK_USED") {
-                sub += " (가용잔고: availBal 기준)";
+                mainAssetSmallSub = "가용잔고: availBal 기준";
             }
-            mainAssetSub = sub;
         }
-    } else if (!okx || okx.okx_balance_fresh === false) {
-        if (assetDisplaySource !== "okx_live_wallet") {
-            mainAssetSub = "내부 추정값";
+    } else {
+        // Fallback to internal estimate
+        if (assetDisplayKrw !== null) {
+            mainAssetDisplay = formatKrw(assetDisplayKrw);
+            mainAssetSub = "Paper 추정값 (실계좌 미연결)";
         }
     }
 
-    let mainUnrealDisplay = toSignedMainKrwSubUsd(pm.totalUnreal, USDKRW_RATE).krw;
-    let mainUnrealSub = `${pm.openCount}건 운용 중`;
-    let mainUnrealVal = pm.totalUnreal;
+    // 2번 카드: 누적 실현 손익 (OKX 실거래 기준)
+    // 아직 OKX 실거래 데이터가 없으므로 0으로 고정하거나 live 필드 확인
+    const liveRealizedPnl = coerceFinite(okx?.okx_live_realized_pnl_usdt) ?? 0;
+    const liveClosedCount = coerceFinite(okx?.okx_live_closed_trade_count) ?? 0;
+    
+    const mainRealizedDisplay = `${liveRealizedPnl.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USDT`;
+    const mainRealizedSub = liveClosedCount > 0 ? "OKX 실거래 기준" : "OKX 실거래 기준 · 아직 청산 거래 없음";
+    const mainRealizedClass = liveRealizedPnl >= 0 ? "text-emerald-600" : "text-rose-600";
+
+    // 4번 카드: 현재 미실현 손익 (OKX 실시간)
+    let mainUnrealDisplay = "0.00 USDT";
+    let mainUnrealSub = "OKX 실시간";
+    let mainUnrealVal = 0;
 
     if (isOkxLive) {
         const u = coerceFinite(okx.okx_unrealized_pnl_usdt);
         if (u !== null) {
             mainUnrealVal = u;
             mainUnrealDisplay = `${u >= 0 ? "+" : "−"}${Math.abs(u).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USDT`;
-            const krwApprox = Math.floor(Math.abs(u) * 1000);
+            const krwApprox = Math.floor(Math.abs(u) * USDKRW_RATE);
             mainUnrealSub = `약 ${u >= 0 ? "+" : "−"}${formatKrw(krwApprox)} · OKX 실시간`;
         }
+    } else {
+        mainUnrealVal = pm.totalUnreal;
+        mainUnrealDisplay = toSignedMainKrwSubUsd(pm.totalUnreal, USDKRW_RATE).krw;
+        mainUnrealSub = `${pm.openCount}건 운용 중 (Paper)`;
     }
+
 
     return (
         <div className="min-h-screen bg-[#F5F7FA] text-slate-800" lang="ko" translate="no">
@@ -953,18 +989,19 @@ export default function FuturesPaperClientPage({ initialBundle }: { initialBundl
                                     label="현재 평가 자산"
                                     value={mainAssetDisplay}
                                     subValue={mainAssetSub}
+                                    smallSubValue={mainAssetSmallSub}
                                     valueClass="text-slate-900"
                                 />
                                 <HeroMetric
                                     label="누적 실현 손익"
-                                    value={toSignedMainKrwSubUsd(ledger.totalRealizedPnlUsd, USDKRW_RATE).krw}
-                                    subValue={`ROI ${formatPercent(ledger.roiPct)}`}
-                                    valueClass={ledger.totalRealizedPnlUsd >= 0 ? "text-emerald-600" : "text-rose-600"}
+                                    value={mainRealizedDisplay}
+                                    subValue={mainRealizedSub}
+                                    valueClass={mainRealizedClass}
                                 />
                                 <HeroMetric
-                                    label="Paper 성과 기준 자산"
-                                    value={paperEquityRefKrw !== null ? formatKrw(paperEquityRefKrw) : "-"}
-                                    subValue="실잔고가 아닌 Paper 성과 기준값"
+                                    label="Paper 기준 자산"
+                                    value={paperEquityRefKrw !== null ? formatKrw(paperEquityRefKrw) : "기록 없음"}
+                                    subValue="실계좌가 아닌 Paper 성과 기준값"
                                     valueClass="text-slate-700"
                                 />
                                  <HeroMetric
