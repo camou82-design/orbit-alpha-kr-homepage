@@ -1,0 +1,16 @@
+keyword,category_group,allowed_category,priority,search_intent,expected_buyer,cs_risk_level,memo,active
+camera screw adapter,CAMERA_ACC,SCREW_ADAPTER,1,SPEC_MATCH,PROFESSIONAL,LOW,High quality spec item,TRUE
+tripod screw adapter,CAMERA_ACC,SCREW_ADAPTER,1,SPEC_MATCH,PROFESSIONAL,LOW,Essential accessory,TRUE
+1/4 3/8 adapter,CAMERA_ACC,SCREW_ADAPTER,1,SPEC_MATCH,PROFESSIONAL,LOW,Clear spec search,TRUE
+3d printer nozzle 0.4mm,3D_PRINTER,NOZZLE,1,REPLACEMENT,MAKER,LOW,Consumable part,TRUE
+cable management clip,OFFICE,CABLE_CLIP,2,PROBLEM_SOLVE,OFFICE_WORKER,LOW,Simple solve,TRUE
+rubber bumper pad,HARDWARE,PAD,2,PROBLEM_SOLVE,DIYER,LOW,Simple solve,TRUE
+bicycle valve adapter,BICYCLE,VALVE_ADAPTER,2,SPEC_MATCH,CYCLIST,LOW,Clear spec search,TRUE
+clamp jig,HARDWARE,JIG,2,SPEC_MATCH,WOODWORKER,MID,Requires spec check,TRUE
+cute item,GENERAL,UNKNOWN,5,BROAD,UNKNOWN,HIGH,Bad keyword example,FALSE
+fashion accessory,FASHION,UNKNOWN,5,BROAD,UNKNOWN,HIGH,Bad keyword example,FALSE
+beauty tool,BEAUTY,UNKNOWN,5,BROAD,UNKNOWN,HIGH,Bad keyword example,FALSE
+baby toy,KIDS,UNKNOWN,5,BROAD,UNKNOWN,HIGH,Bad keyword example,FALSE
+smart gadget,ELECTRONIC,UNKNOWN,5,BROAD,UNKNOWN,HIGH,Bad keyword example,FALSE
+best seller,GENERAL,UNKNOWN,5,BROAD,UNKNOWN,HIGH,Bad keyword example,FALSE
+household item,GENERAL,UNKNOWN,5,BROAD,UNKNOWN,HIGH,Bad keyword example,FALSE

@@ -1,0 +1,4 @@
+source_name,source_type,base_url,allowed_to_collect,memo
+Taobao,PLATFORM,https://www.taobao.com,TRUE,Main source
+AliExpress,PLATFORM,https://www.aliexpress.com,TRUE,Secondary source
+1688,PLATFORM,https://www.1688.com,TRUE,Wholesale source

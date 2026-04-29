@@ -1,0 +1,2 @@
+product_id,question_type,question_text,cause,detail_page_fix_needed,risk_level,action_taken
+P100,예시,호환되나요?,규격 미기재,TRUE,LOW,상세페이지 수정

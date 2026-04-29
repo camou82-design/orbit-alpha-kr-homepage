@@ -1,0 +1,2 @@
+product_id,product_name,marketplace,listing_url,listing_created_at,sale_price,final_margin_rate,listing_status,first_24h_views,first_24h_clicks,inquiries_count,order_count,cancel_count,return_count,issue_memo,next_action
+P100,카메라 삼각대 나사 어댑터,스마트스토어,N/A,,0,0%,WAITING,0,0,0,0,0,0,,WAITING

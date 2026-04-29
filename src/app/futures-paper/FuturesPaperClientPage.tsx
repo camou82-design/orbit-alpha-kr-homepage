@@ -64,6 +64,7 @@ type Bundle = {
     killSwitch?: boolean;
     trade_control_updated_at?: number;
     trade_control_source?: string;
+    paperOperational?: Record<string, unknown>;
 };
 
 type NormPos = {
@@ -270,6 +271,17 @@ function toSignedMainKrwSubUsd(usd: number, rate: number) {
         krw: `${sign}${formatKrw(abs * rate)}`,
         usd: `약 ${sign}$${abs.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
     };
+}
+
+function getPaperOperational(bundle: Bundle): Record<string, unknown> | null {
+    const top = bundle.paperOperational;
+    if (top && typeof top === "object") return top;
+    const dash = bundle.dashboard;
+    if (dash && typeof dash === "object") {
+        const nested = (dash as Record<string, unknown>).paperOperational;
+        if (nested && typeof nested === "object") return nested as Record<string, unknown>;
+    }
+    return null;
 }
 
 /** Components */
@@ -698,6 +710,11 @@ function OperatorControlSection({
     const closeOnly = (bundle.closeOnlyMode ?? tradeControl?.closeOnlyMode ?? false) === true;
     const killActive = (bundle.killSwitch ?? tradeControl?.killSwitch ?? false) === true;
     const updatedAt = coerceFinite(bundle.trade_control_updated_at ?? tradeControl?.updatedAt);
+    const paperOperational = getPaperOperational(bundle);
+    const entryReady = paperOperational?.entry_ready_for_new_position === true;
+    const entryReasons = Array.isArray(paperOperational?.entry_ready_reasons)
+        ? (paperOperational?.entry_ready_reasons as unknown[]).filter((x): x is string => typeof x === "string" && x.length > 0)
+        : [];
 
     return (
         <section className="space-y-4">
@@ -716,9 +733,12 @@ function OperatorControlSection({
                         </div>
                         <div>
                             <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">신규 진입</p>
-                            <p className={`mt-1.5 text-sm font-bold ${tradeEnabled && !closeOnly && !killActive ? "text-emerald-600" : "text-rose-500"}`}>
-                                {tradeEnabled && !closeOnly && !killActive ? "가능" : "차단"}
+                            <p className={`mt-1.5 text-sm font-bold ${entryReady ? "text-emerald-600" : "text-rose-500"}`}>
+                                {entryReady ? "신규 진입 가능" : "신규 진입 제한"}
                             </p>
+                            {entryReasons.length > 0 && (
+                                <p className="mt-1 max-w-64 text-[10px] text-slate-500">{entryReasons.join(" · ")}</p>
+                            )}
                         </div>
                         {closeOnly && (
                             <div>
@@ -833,6 +853,54 @@ export default function FuturesPaperClientPage({ initialBundle }: { initialBundl
 
     const pm = bundle ? aggregatePortfolioMetricsFromBundle(bundle) : { openCount: 0, totalUnreal: 0 };
     const ledger = computeLedgerPerformanceFromHistory(history);
+    const paperOperational = getPaperOperational(bundle);
+    const assetDisplayKrw = coerceFinite(paperOperational?.current_asset_display_krw);
+    const assetDisplayLabel = typeof paperOperational?.current_asset_display_label === "string" ? paperOperational.current_asset_display_label : "";
+    const assetDisplaySource = typeof paperOperational?.current_asset_display_source === "string" ? paperOperational.current_asset_display_source : "";
+    const paperEquityRefKrw = coerceFinite(paperOperational?.paper_equity_reference_krw);
+    const sourceLabel =
+        assetDisplaySource === "okx_live_wallet"
+            ? "OKX 실잔고 기준"
+            : assetDisplaySource === "paper_config"
+                ? "Paper 기준"
+                : "내부 추정값";
+
+    const okx = (bundle.dashboard as any)?.okx_balance;
+    const isOkxLive = okx?.okx_balance_source === "okx_live_wallet" && okx?.okx_balance_fresh === true;
+
+    let mainAssetDisplay = assetDisplaySource === "unavailable" ? "실잔고 확인 불가" : assetDisplayKrw !== null ? formatKrw(assetDisplayKrw) : "-";
+    let mainAssetSub = assetDisplayLabel ? `${sourceLabel} · ${assetDisplayLabel}` : sourceLabel;
+
+    if (isOkxLive) {
+        const eq = coerceFinite(okx.okx_total_equity_usdt);
+        if (eq !== null) {
+            mainAssetDisplay = `${eq.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USDT`;
+            const krwApprox = Math.floor(eq * 1000);
+            let sub = `약 ${formatKrw(krwApprox)} · OKX 실계좌`;
+            if (okx.okx_balance_error === "AVAILABLE_FIELD_FALLBACK_USED") {
+                sub += " (가용잔고: availBal 기준)";
+            }
+            mainAssetSub = sub;
+        }
+    } else if (!okx || okx.okx_balance_fresh === false) {
+        if (assetDisplaySource !== "okx_live_wallet") {
+            mainAssetSub = "내부 추정값";
+        }
+    }
+
+    let mainUnrealDisplay = toSignedMainKrwSubUsd(pm.totalUnreal, USDKRW_RATE).krw;
+    let mainUnrealSub = `${pm.openCount}건 운용 중`;
+    let mainUnrealVal = pm.totalUnreal;
+
+    if (isOkxLive) {
+        const u = coerceFinite(okx.okx_unrealized_pnl_usdt);
+        if (u !== null) {
+            mainUnrealVal = u;
+            mainUnrealDisplay = `${u >= 0 ? "+" : "−"}${Math.abs(u).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USDT`;
+            const krwApprox = Math.floor(Math.abs(u) * 1000);
+            mainUnrealSub = `약 ${u >= 0 ? "+" : "−"}${formatKrw(krwApprox)} · OKX 실시간`;
+        }
+    }
 
     return (
         <div className="min-h-screen bg-[#F5F7FA] text-slate-800" lang="ko" translate="no">
@@ -879,31 +947,48 @@ export default function FuturesPaperClientPage({ initialBundle }: { initialBundl
                         />
 
                         {/* 2. 핵심 요약 */}
-                        <section className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-                            <HeroMetric
-                                label="현재 평가 자산"
-                                value={formatKrw(ledger.currentCapitalKrw)}
-                                subValue={`상방 ${formatChanged(ledger.currentCapitalKrw - ledger.initialCapitalKrw)}`}
-                                valueClass="text-slate-900"
-                            />
-                            <HeroMetric
-                                label="누적 실현 손익"
-                                value={toSignedMainKrwSubUsd(ledger.totalRealizedPnlUsd, USDKRW_RATE).krw}
-                                subValue={`ROI ${formatPercent(ledger.roiPct)}`}
-                                valueClass={ledger.totalRealizedPnlUsd >= 0 ? "text-emerald-600" : "text-rose-600"}
-                            />
-                            <HeroMetric
-                                label="현재 미실현 손익"
-                                value={toSignedMainKrwSubUsd(pm.totalUnreal, USDKRW_RATE).krw}
-                                subValue={`${pm.openCount}건 운용 중`}
-                                valueClass={pm.totalUnreal >= 0 ? "text-emerald-600" : "text-rose-600"}
-                            />
-                             <HeroMetric
-                                label="종료 거래 건수"
-                                value={formatCount(ledger.totalTrades)}
-                                subValue="전체 기간 합산"
-                                valueClass="text-slate-600"
-                            />
+                        <section className="space-y-4">
+                            <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+                                <HeroMetric
+                                    label="현재 평가 자산"
+                                    value={mainAssetDisplay}
+                                    subValue={mainAssetSub}
+                                    valueClass="text-slate-900"
+                                />
+                                <HeroMetric
+                                    label="누적 실현 손익"
+                                    value={toSignedMainKrwSubUsd(ledger.totalRealizedPnlUsd, USDKRW_RATE).krw}
+                                    subValue={`ROI ${formatPercent(ledger.roiPct)}`}
+                                    valueClass={ledger.totalRealizedPnlUsd >= 0 ? "text-emerald-600" : "text-rose-600"}
+                                />
+                                <HeroMetric
+                                    label="Paper 성과 기준 자산"
+                                    value={paperEquityRefKrw !== null ? formatKrw(paperEquityRefKrw) : "-"}
+                                    subValue="실잔고가 아닌 Paper 성과 기준값"
+                                    valueClass="text-slate-700"
+                                />
+                                 <HeroMetric
+                                    label="현재 미실현 손익"
+                                    value={mainUnrealDisplay}
+                                    subValue={mainUnrealSub}
+                                    valueClass={mainUnrealVal >= 0 ? "text-emerald-600" : "text-rose-600"}
+                                />
+                            </div>
+
+                            {isOkxLive && (
+                                <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+                                    <MetricCell 
+                                        label="실 사용 가능 잔고" 
+                                        value={`${coerceFinite(okx.okx_available_balance_usdt)?.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USDT`}
+                                        className="bg-emerald-50/30 border-emerald-100"
+                                    />
+                                    <MetricCell 
+                                        label="사용 중 증거금" 
+                                        value={`${coerceFinite(okx.okx_margin_used_usdt)?.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USDT`}
+                                        className="bg-amber-50/30 border-amber-100"
+                                    />
+                                </div>
+                            )}
                         </section>
 
                         {/* 3. 현재 포지션 */}

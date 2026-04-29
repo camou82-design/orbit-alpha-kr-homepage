@@ -1,0 +1,2 @@
+parent_keyword,expanded_keyword,reason,expected_category,risk_expectation,cs_risk_expectation,active,test_limit
+"Unknown","rubber screw adapter","APPROVED 성공 패턴 계열 확장","HARDWARE","LOW","MEDIUM",false,20
