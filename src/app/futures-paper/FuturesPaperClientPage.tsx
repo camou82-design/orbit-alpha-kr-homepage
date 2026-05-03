@@ -223,6 +223,134 @@ function formatHoldShort(openedAtMs: number | null): string {
     return `${s}초`;
 }
 
+type PositionDisplaySlot = Readonly<{
+    pos: Record<string, unknown>;
+    exchangeDiagnosticBadge: string | null;
+    exchangeStatusHeadline: string | null;
+}>;
+
+function positionRowKey(symbol: string, side: string): string {
+    const sd = String(side).toLowerCase() === "short" ? "short" : "long";
+    return `${String(symbol)}:${sd}`;
+}
+
+/**
+ * 1) Paper ledger openPositions
+ * 2) engineState.ledger_okx_position_sync.okx_positions_preview (원장 비었을 때)
+ * 3) engineState.position_ops_surface.rows (미중복 보강)
+ */
+function buildPositionDisplaySlots(bundle: Bundle): PositionDisplaySlot[] {
+    const engine =
+        bundle.engineState && typeof bundle.engineState === "object"
+            ? (bundle.engineState as Record<string, unknown>)
+            : null;
+    const sync = engine?.ledger_okx_position_sync as Record<string, unknown> | undefined | null;
+    const ops = engine?.position_ops_surface as Record<string, unknown> | undefined | null;
+
+    const syncStatus = typeof sync?.sync_status === "string" ? sync.sync_status : "";
+
+    const ledgerRaw = Array.isArray(bundle.openPositions) ? (bundle.openPositions as Record<string, unknown>[]) : [];
+    const ledgerOpen = ledgerRaw.filter((p) => p.status === undefined || String(p.status) === "open");
+
+    const reconcileBadge =
+        syncStatus === "OKX_ONLY" ||
+        syncStatus === "KEY_MISMATCH" ||
+        syncStatus === "LEDGER_ONLY" ||
+        syncStatus === "REMOTE_UNAVAILABLE"
+            ? `리컨실 ${syncStatus}`
+            : null;
+
+    const slots: PositionDisplaySlot[] = [];
+    for (const p of ledgerOpen) {
+        slots.push({
+            pos: p,
+            exchangeDiagnosticBadge: reconcileBadge,
+            exchangeStatusHeadline: null
+        });
+    }
+
+    if (ledgerOpen.length > 0) return slots;
+
+    const preview = Array.isArray(sync?.okx_positions_preview)
+        ? (sync.okx_positions_preview as Record<string, unknown>[])
+        : [];
+    const opsRows = Array.isArray(ops?.rows) ? (ops.rows as Record<string, unknown>[]) : [];
+
+    const findOpsRow = (symbol: string, side: string) =>
+        opsRows.find(
+            (r) =>
+                String(r.symbol) === symbol &&
+                String(r.side).toLowerCase() === String(side).toLowerCase()
+        );
+
+    const seen = new Set<string>();
+
+    if (preview.length > 0) {
+        for (const row of preview) {
+            const symbol = String(row.symbol ?? "");
+            const side = String(row.side ?? "long").toLowerCase() === "short" ? "short" : "long";
+            const key = positionRowKey(symbol, side);
+            seen.add(key);
+            const op = findOpsRow(symbol, side);
+            const entryPx =
+                coerceFinite(op?.reference_entry_px) ?? coerceFinite(op?.okx_avg_px) ?? null;
+            const stopPx =
+                coerceFinite(op?.ledger_stop_px) ?? coerceFinite(op?.initial_stop_px_engine_mirror) ?? null;
+            const contracts = coerceFinite(row.pos);
+            const warn =
+                syncStatus === "OKX_ONLY"
+                    ? "Paper 원장 미동기화 · OKX_ONLY"
+                    : syncStatus === "ALIGNED"
+                        ? "실거래소 포지션 (미동기 원장 없음)"
+                        : `실거래소 포지션 · ${syncStatus}`;
+            slots.push({
+                pos: {
+                    symbol,
+                    side,
+                    ...(entryPx !== null ? { entryPrice: entryPx } : {}),
+                    ...(stopPx !== null ? { stopPrice: stopPx } : {}),
+                    leverage: 10,
+                    status: "open",
+                    _orb_exchange_only: true,
+                    ...(contracts !== null ? { _orb_contracts: contracts } : {})
+                },
+                exchangeDiagnosticBadge: warn,
+                exchangeStatusHeadline: "실거래소 포지션 보유 중"
+            });
+        }
+    }
+
+    for (const op of opsRows) {
+        const symbol = String(op.symbol ?? "");
+        const side = String(op.side ?? "long").toLowerCase() === "short" ? "short" : "long";
+        const key = positionRowKey(symbol, side);
+        if (seen.has(key)) continue;
+        seen.add(key);
+        const entryPx =
+            coerceFinite(op.reference_entry_px) ?? coerceFinite(op.okx_avg_px) ?? null;
+        const stopPx =
+            coerceFinite(op.ledger_stop_px) ?? coerceFinite(op.initial_stop_px_engine_mirror) ?? null;
+        slots.push({
+            pos: {
+                symbol,
+                side,
+                ...(entryPx !== null ? { entryPrice: entryPx } : {}),
+                ...(stopPx !== null ? { stopPrice: stopPx } : {}),
+                leverage: 10,
+                status: "open",
+                _orb_exchange_only: true
+            },
+            exchangeDiagnosticBadge:
+                syncStatus && syncStatus !== "ALIGNED"
+                    ? `실거래소 포지션 · 리컨실 ${syncStatus}`
+                    : "실거래소 포지션 (ops_surface)",
+            exchangeStatusHeadline: "실거래소 포지션 보유 중"
+        });
+    }
+
+    return slots;
+}
+
 function aggregatePortfolioMetricsFromBundle(bundle: Bundle) {
     const opens = Array.isArray(bundle.openPositions) ? bundle.openPositions : [];
     const eng = bundle.engineState;
@@ -419,12 +547,16 @@ function PositionMoneyCard({
     pos,
     row,
     symbolDecisions,
-    showInternalTags
+    showInternalTags,
+    exchangeDiagnosticBadge,
+    exchangeStatusHeadline
 }: {
     pos: Record<string, unknown>;
     row: Record<string, unknown> | undefined;
     symbolDecisions: Record<string, unknown> | null;
     showInternalTags: boolean;
+    exchangeDiagnosticBadge?: string | null;
+    exchangeStatusHeadline?: string | null;
 }) {
     const n = normalizeOpenPos(pos);
     const sym = String(pos.symbol ?? "");
@@ -451,8 +583,24 @@ function PositionMoneyCard({
     const exitProg =
         typeof pe === "number" && Number.isFinite(pe) ? `${Math.max(0, Math.min(3, Math.floor(pe)))}/3` : "-";
 
+    const synthExchange = pos._orb_exchange_only === true;
+    const statusLine =
+        exchangeStatusHeadline ??
+        (dec?.guidance ? String(dec.guidance) : synthExchange ? "실거래소 기준 (원장 미연동)" : "유지");
+
     return (
-        <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+        <div
+            className={`rounded-lg border p-5 shadow-sm ${
+                exchangeDiagnosticBadge
+                    ? "border-amber-200 bg-amber-50/25"
+                    : "border-slate-200 bg-white"
+            }`}
+        >
+            {exchangeDiagnosticBadge && (
+                <div className="mb-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] font-bold text-amber-900">
+                    경고: {exchangeDiagnosticBadge}
+                </div>
+            )}
             <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
                 <div className="flex items-center gap-3">
                     <span className="font-mono text-lg font-bold text-slate-800 notranslate" translate="no">{sym}</span>
@@ -463,7 +611,7 @@ function PositionMoneyCard({
                 </div>
                 <div className="flex items-center gap-2">
                     <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400">현재 상태:</span>
-                    <span className="text-xs font-bold text-slate-600">{dec?.guidance ? String(dec.guidance) : "유지"}</span>
+                    <span className="text-xs font-bold text-slate-600">{statusLine}</span>
                 </div>
             </div>
 
@@ -478,6 +626,13 @@ function PositionMoneyCard({
             {showInternalTags && (
                 <div className="mt-4 space-y-4 border-t border-slate-100 pt-4">
                     <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+                         {coerceFinite(pos._orb_contracts) !== null && (
+                             <MetricCell
+                                 label="OKX 계약 수(pos)"
+                                 value={String(coerceFinite(pos._orb_contracts))}
+                                 valueClass="text-slate-700"
+                             />
+                         )}
                          <MetricCell label="진입금액" value={notionalUsd !== null ? toMainKrwSubUsd(notionalUsd, USDKRW_RATE).krw : "-"} />
                          <MetricCell label="증거금" value={marginUsd !== null ? toMainKrwSubUsd(marginUsd, USDKRW_RATE).krw : "-"} />
                          <MetricCell label="청산 단계" value={exitProg} valueClass="text-emerald-600" />
@@ -866,7 +1021,7 @@ export default function FuturesPaperClientPage({ initialBundle }: { initialBundl
     const riskState = pick(engine, ["risk_state", "riskStatus", "risk_state_status"]);
     const executor = pick(engine, ["active_mode_executor", "activeModeExecutor", "executor"]);
 
-    const openPositions = Array.isArray(bundle?.openPositions) ? (bundle.openPositions as any[]) : [];
+    const positionSlots = buildPositionDisplaySlots(bundle);
     const symbolDecisions = (engine as any)?.symbol_decisions ?? null;
 
     const pm = bundle ? aggregatePortfolioMetricsFromBundle(bundle) : { openCount: 0, totalUnreal: 0 };
@@ -1040,18 +1195,20 @@ export default function FuturesPaperClientPage({ initialBundle }: { initialBundl
                                 </button>
                             </div>
                             <div className="space-y-3">
-                                {openPositions.length === 0 ? (
+                                {positionSlots.length === 0 ? (
                                     <div className="flex flex-col h-24 items-center justify-center rounded-lg border border-dashed border-slate-200 bg-white/50 text-center">
                                         <p className="text-xs font-bold text-slate-400">보유 포지션 없음</p>
                                     </div>
                                 ) : (
-                                    openPositions.map((p, i) => (
+                                    positionSlots.map((slot, i) => (
                                         <PositionMoneyCard
                                             key={i}
-                                            pos={p}
-                                            row={bundle.symbolRows?.find((r) => r.symbol === p.symbol)}
+                                            pos={slot.pos}
+                                            row={bundle.symbolRows?.find((r) => r.symbol === slot.pos.symbol)}
                                             symbolDecisions={symbolDecisions}
                                             showInternalTags={showInternalTags}
+                                            exchangeDiagnosticBadge={slot.exchangeDiagnosticBadge}
+                                            exchangeStatusHeadline={slot.exchangeStatusHeadline}
                                         />
                                     ))
                                 )}
@@ -1065,7 +1222,7 @@ export default function FuturesPaperClientPage({ initialBundle }: { initialBundl
                                 {SYMBOL_ORDER.map((sym) => {
                                     const row = bundle.symbolRows.find((r) => r.symbol === sym);
                                     if (!row) return null;
-                                    const hasPos = openPositions.some((p) => p.symbol === sym);
+                                    const hasPos = positionSlots.some((s) => String(s.pos.symbol) === sym);
                                     return (
                                         <SymbolStatusCard
                                             key={sym}
