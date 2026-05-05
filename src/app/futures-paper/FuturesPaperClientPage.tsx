@@ -253,39 +253,39 @@ function getActivePositions(bundle: Bundle): { positions: Array<Record<string, a
         ? (sync.okx_positions_preview as Record<string, any>[]) 
         : [];
 
-    // Rule 1: currentPositions가 배열이면 무조건 그것만 사용 (Authoritative)
+    let authoritativeRaw: any[] = [];
+    let isFallback = false;
+
     if (Array.isArray(bundle.currentPositions)) {
-        return { 
-            positions: bundle.currentPositions.filter(p => p && (p.status === undefined || String(p.status) === "open")), 
-            isFallback: false 
-        };
+        authoritativeRaw = bundle.currentPositions;
+    } else {
+        authoritativeRaw = Array.isArray(bundle.openPositions) ? bundle.openPositions : [];
+        isFallback = true;
     }
 
-    // Rule 2: currentPositions가 없을 때만 openPositions로 fallback
-    const fallbackRaw = Array.isArray(bundle.openPositions) ? bundle.openPositions : [];
-    const ledgerOpen = fallbackRaw.filter((p) => p && (p.status === undefined || String(p.status) === "open"));
+    const ledgerOpen = authoritativeRaw.filter((p) => p && (p.status === undefined || String(p.status) === "open"));
 
-    // Rule 3: Mismatch 상황이면 openPositions를 확정 현재 포지션으로 표시하지 않음
+    // Rule 3 & 4: Mismatch 상황이면 OKX에 실존하지 않는 원장 row 제거
     const problematicSync = [
         "KEY_MISMATCH", "LEDGER_ONLY", "OKX_ONLY", "SIZE_MISMATCH", "NOTIONAL_MISMATCH"
     ].includes(syncStatus);
 
     if (problematicSync) {
-        // Rule 4: OKX/current에 없는 ledger row는 현재 포지션 카드에서 제거
         return {
             positions: ledgerOpen.filter(p => {
                 const sym = String(p.symbol || "");
                 const side = String(p.side || "long").toLowerCase();
+                // OKX 프리뷰에 존재하는지 확인
                 return okxPreview.some(o => 
                     String(o.symbol) === sym && 
                     String(o.side).toLowerCase() === side
                 );
             }),
-            isFallback: true
+            isFallback
         };
     }
 
-    return { positions: ledgerOpen, isFallback: true };
+    return { positions: ledgerOpen, isFallback };
 }
 
 /**
