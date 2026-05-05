@@ -56,6 +56,7 @@ type Bundle = {
     healthHistoryRecent: Array<Record<string, unknown>>;
     ledgerPerformance: LedgerPerformance | null;
     openPositions?: Array<Record<string, unknown>>;
+    currentPositions?: Array<Record<string, unknown>>;
     eventsRecent?: Array<Record<string, unknown>>;
     positionsHistory?: Array<Record<string, any>>;
     // Control states
@@ -249,8 +250,10 @@ function buildPositionDisplaySlots(bundle: Bundle): PositionDisplaySlot[] {
 
     const syncStatus = typeof sync?.sync_status === "string" ? sync.sync_status : "";
 
-    const ledgerRaw = Array.isArray(bundle.openPositions) ? (bundle.openPositions as Record<string, unknown>[]) : [];
-    const ledgerOpen = ledgerRaw.filter((p) => p.status === undefined || String(p.status) === "open");
+    const ledgerRaw = Array.isArray(bundle.currentPositions || bundle.openPositions)
+        ? ((bundle.currentPositions || bundle.openPositions) as Record<string, unknown>[])
+        : [];
+    const ledgerOpen = ledgerRaw.filter((p) => p && (p.status === undefined || String(p.status) === "open"));
 
     const reconcileBadge =
         syncStatus === "OKX_ONLY" ||
@@ -352,7 +355,8 @@ function buildPositionDisplaySlots(bundle: Bundle): PositionDisplaySlot[] {
 }
 
 function aggregatePortfolioMetricsFromBundle(bundle: Bundle) {
-    const opens = Array.isArray(bundle.openPositions) ? bundle.openPositions : [];
+    const opensRaw = bundle.currentPositions || bundle.openPositions;
+    const opens = Array.isArray(opensRaw) ? opensRaw.filter(p => p && (p.status === undefined || String(p.status) === "open")) : [];
     const eng = bundle.engineState;
     const symDec =
         eng && typeof eng === "object"
@@ -551,7 +555,7 @@ function PositionMoneyCard({
     exchangeDiagnosticBadge,
     exchangeStatusHeadline
 }: {
-    pos: Record<string, unknown>;
+    pos: Record<string, any>;
     row: Record<string, unknown> | undefined;
     symbolDecisions: Record<string, unknown> | null;
     showInternalTags: boolean;
@@ -588,6 +592,48 @@ function PositionMoneyCard({
         exchangeStatusHeadline ??
         (dec?.guidance ? String(dec.guidance) : synthExchange ? "실거래소 기준 (원장 미연동)" : "유지");
 
+    // Regime Badges
+    const getRegimeBadge = (p: any) => {
+        if (!p) return null;
+        if (p.sourceSignal === "okx_reconcile_adopted" || p.lifecycleState === "CLOSE_ONLY_MANAGED") {
+            if (p.lifecycleState === "CLOSE_ONLY_MANAGED") return { text: "Close-only 관리", cls: "bg-amber-100 text-amber-700 border-amber-200" };
+            return { text: "복구 관리", cls: "bg-amber-100 text-amber-700 border-amber-200" };
+        }
+        const r = p.regimeAtEntry || p.executorAtEntry || p.strategy;
+        if (r === "RANGE" || r === "R") return { text: "R", cls: "bg-blue-100 text-blue-700 border-blue-200" };
+        if (r === "TREND" || r === "T") return { text: "T", cls: "bg-indigo-100 text-indigo-700 border-indigo-200" };
+        if (r === "TRANSITION" || r === "TR") return { text: "TR", cls: "bg-purple-100 text-purple-700 border-purple-200" };
+        if (r === "SHOCK" || r === "S") return { text: "S", cls: "bg-orange-100 text-orange-700 border-orange-200" };
+        if (r === "NO_TRADE") return { text: "관리", cls: "bg-slate-100 text-slate-700 border-slate-200" };
+        return null;
+    };
+
+    const rb = getRegimeBadge(pos);
+
+    // Range/Trend specific TP/SL
+    let exitTargetLabel = "익절가";
+    let exitTargetValue = "-";
+    const isTrend = (pos.regimeAtEntry || pos.executorAtEntry || pos.strategy) === "TREND";
+    const isRange = (pos.regimeAtEntry || pos.executorAtEntry || pos.strategy) === "RANGE";
+
+    if (isTrend) {
+        exitTargetLabel = "추세 청산 기준";
+        const trail = coerceFinite(pos.trailingStopPrice);
+        const inv = coerceFinite(pos.trendInvalidationPrice);
+        if (trail !== null || inv !== null) {
+            exitTargetValue = trail !== null ? formatPrice(trail) : formatPrice(inv);
+        }
+    } else if (isRange) {
+        const tp1 = coerceFinite(pos.targetPrice1);
+        const tp = coerceFinite(pos.takeProfit);
+        if (tp1 !== null || tp !== null) {
+            exitTargetValue = formatPrice(tp1 ?? tp);
+        }
+    } else {
+        const tp = coerceFinite(pos.takeProfit);
+        if (tp !== null) exitTargetValue = formatPrice(tp);
+    }
+
     return (
         <div
             className={`rounded-lg border p-5 shadow-sm ${
@@ -607,6 +653,11 @@ function PositionMoneyCard({
                     <span className={`rounded px-2 py-0.5 text-[10px] font-bold ${pos.side === "short" ? "bg-rose-50 text-rose-600 border border-rose-100" : "bg-emerald-50 text-emerald-600 border border-emerald-100"}`}>
                         {side}
                     </span>
+                    {rb && (
+                        <span className={`rounded px-2 py-0.5 text-[9px] font-bold border ${rb.cls}`}>
+                            {rb.text}
+                        </span>
+                    )}
                     <span className="text-xs font-medium text-slate-400">· {hold}</span>
                 </div>
                 <div className="flex items-center gap-2">
@@ -615,17 +666,18 @@ function PositionMoneyCard({
                 </div>
             </div>
 
-            <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
+            <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
                 <MetricCell label="진입가" value={entryDisp} />
                 <MetricCell label="현재가" value={markDisp} valueClass="text-amber-700" />
                 <MetricCell label="손익" value={uPnL !== null ? toSignedMainKrwSubUsd(uPnL, USDKRW_RATE).krw : "-"} valueClass={uClass} />
                 <MetricCell label="수익률" value={uPct} valueClass={uClass} />
+                <MetricCell label={exitTargetLabel} value={exitTargetValue} valueClass="text-emerald-600" />
                 <MetricCell label="손절가" value={stopDisplay} valueClass="text-rose-500" />
             </div>
 
             {showInternalTags && (
                 <div className="mt-4 space-y-4 border-t border-slate-100 pt-4">
-                    <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+                    <div className="grid grid-cols-2 gap-4 lg:grid-cols-5">
                          {coerceFinite(pos._orb_contracts) !== null && (
                              <MetricCell
                                  label="OKX 계약 수(pos)"
@@ -635,6 +687,7 @@ function PositionMoneyCard({
                          )}
                          <MetricCell label="진입금액" value={notionalUsd !== null ? toMainKrwSubUsd(notionalUsd, USDKRW_RATE).krw : "-"} />
                          <MetricCell label="증거금" value={marginUsd !== null ? toMainKrwSubUsd(marginUsd, USDKRW_RATE).krw : "-"} />
+                         <MetricCell label="손절가" value={stopDisplay} valueClass="text-rose-500" />
                          <MetricCell label="청산 단계" value={exitProg} valueClass="text-emerald-600" />
                          <div>
                             <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">진입 시각</p>
