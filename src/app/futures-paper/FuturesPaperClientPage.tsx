@@ -240,6 +240,59 @@ function positionRowKey(symbol: string, side: string): string {
  * 2) engineState.ledger_okx_position_sync.okx_positions_preview (원장 비었을 때)
  * 3) engineState.position_ops_surface.rows (미중복 보강)
  */
+/**
+ * Helper to extract definitive current positions from bundle
+ */
+function getActivePositions(bundle: Bundle): { positions: Array<Record<string, any>>, isFallback: boolean } {
+    const engine = bundle.engineState && typeof bundle.engineState === "object"
+        ? (bundle.engineState as Record<string, any>)
+        : null;
+    const sync = engine?.ledger_okx_position_sync as Record<string, any> | undefined | null;
+    const syncStatus = typeof sync?.sync_status === "string" ? sync.sync_status : "";
+    const okxPreview = Array.isArray(sync?.okx_positions_preview) 
+        ? (sync.okx_positions_preview as Record<string, any>[]) 
+        : [];
+
+    // Rule 1: currentPositions가 배열이면 무조건 그것만 사용 (Authoritative)
+    if (Array.isArray(bundle.currentPositions)) {
+        return { 
+            positions: bundle.currentPositions.filter(p => p && (p.status === undefined || String(p.status) === "open")), 
+            isFallback: false 
+        };
+    }
+
+    // Rule 2: currentPositions가 없을 때만 openPositions로 fallback
+    const fallbackRaw = Array.isArray(bundle.openPositions) ? bundle.openPositions : [];
+    const ledgerOpen = fallbackRaw.filter((p) => p && (p.status === undefined || String(p.status) === "open"));
+
+    // Rule 3: Mismatch 상황이면 openPositions를 확정 현재 포지션으로 표시하지 않음
+    const problematicSync = [
+        "KEY_MISMATCH", "LEDGER_ONLY", "OKX_ONLY", "SIZE_MISMATCH", "NOTIONAL_MISMATCH"
+    ].includes(syncStatus);
+
+    if (problematicSync) {
+        // Rule 4: OKX/current에 없는 ledger row는 현재 포지션 카드에서 제거
+        return {
+            positions: ledgerOpen.filter(p => {
+                const sym = String(p.symbol || "");
+                const side = String(p.side || "long").toLowerCase();
+                return okxPreview.some(o => 
+                    String(o.symbol) === sym && 
+                    String(o.side).toLowerCase() === side
+                );
+            }),
+            isFallback: true
+        };
+    }
+
+    return { positions: ledgerOpen, isFallback: true };
+}
+
+/**
+ * 전용 뷰 데이터를 구성하는 함수
+ * 1) getActivePositions (currentPositions 우선, openPositions fallback/필터)
+ * 2) 원장 비었을 때 OKX 전용 포지션 보강 (okx_positions_preview / ops_surface)
+ */
 function buildPositionDisplaySlots(bundle: Bundle): PositionDisplaySlot[] {
     const engine =
         bundle.engineState && typeof bundle.engineState === "object"
@@ -247,24 +300,28 @@ function buildPositionDisplaySlots(bundle: Bundle): PositionDisplaySlot[] {
             : null;
     const sync = engine?.ledger_okx_position_sync as Record<string, unknown> | undefined | null;
     const ops = engine?.position_ops_surface as Record<string, unknown> | undefined | null;
-
     const syncStatus = typeof sync?.sync_status === "string" ? sync.sync_status : "";
 
-    const ledgerRaw = Array.isArray(bundle.currentPositions || bundle.openPositions)
-        ? ((bundle.currentPositions || bundle.openPositions) as Record<string, unknown>[])
-        : [];
-    const ledgerOpen = ledgerRaw.filter((p) => p && (p.status === undefined || String(p.status) === "open"));
+    const { positions: activePositions } = getActivePositions(bundle);
 
     const reconcileBadge =
         syncStatus === "OKX_ONLY" ||
         syncStatus === "KEY_MISMATCH" ||
         syncStatus === "LEDGER_ONLY" ||
-        syncStatus === "REMOTE_UNAVAILABLE"
+        syncStatus === "REMOTE_UNAVAILABLE" ||
+        syncStatus === "SIZE_MISMATCH" ||
+        syncStatus === "NOTIONAL_MISMATCH"
             ? `리컨실 ${syncStatus}`
             : null;
 
     const slots: PositionDisplaySlot[] = [];
-    for (const p of ledgerOpen) {
+    const seenKeys = new Set<string>();
+
+    for (const p of activePositions) {
+        const sym = String(p.symbol || "");
+        const side = String(p.side || "long").toLowerCase();
+        seenKeys.add(positionRowKey(sym, side));
+        
         slots.push({
             pos: p,
             exchangeDiagnosticBadge: reconcileBadge,
@@ -272,8 +329,7 @@ function buildPositionDisplaySlots(bundle: Bundle): PositionDisplaySlot[] {
         });
     }
 
-    if (ledgerOpen.length > 0) return slots;
-
+    // 원장에 없는 OKX ONLY 포지션 보강
     const preview = Array.isArray(sync?.okx_positions_preview)
         ? (sync.okx_positions_preview as Record<string, unknown>[])
         : [];
@@ -286,53 +342,18 @@ function buildPositionDisplaySlots(bundle: Bundle): PositionDisplaySlot[] {
                 String(r.side).toLowerCase() === String(side).toLowerCase()
         );
 
-    const seen = new Set<string>();
-
-    if (preview.length > 0) {
-        for (const row of preview) {
-            const symbol = String(row.symbol ?? "");
-            const side = String(row.side ?? "long").toLowerCase() === "short" ? "short" : "long";
-            const key = positionRowKey(symbol, side);
-            seen.add(key);
-            const op = findOpsRow(symbol, side);
-            const entryPx =
-                coerceFinite(op?.reference_entry_px) ?? coerceFinite(op?.okx_avg_px) ?? null;
-            const stopPx =
-                coerceFinite(op?.ledger_stop_px) ?? coerceFinite(op?.initial_stop_px_engine_mirror) ?? null;
-            const contracts = coerceFinite(row.pos);
-            const warn =
-                syncStatus === "OKX_ONLY"
-                    ? "Paper 원장 미동기화 · OKX_ONLY"
-                    : syncStatus === "ALIGNED"
-                        ? "실거래소 포지션 (미동기 원장 없음)"
-                        : `실거래소 포지션 · ${syncStatus}`;
-            slots.push({
-                pos: {
-                    symbol,
-                    side,
-                    ...(entryPx !== null ? { entryPrice: entryPx } : {}),
-                    ...(stopPx !== null ? { stopPrice: stopPx } : {}),
-                    leverage: 10,
-                    status: "open",
-                    _orb_exchange_only: true,
-                    ...(contracts !== null ? { _orb_contracts: contracts } : {})
-                },
-                exchangeDiagnosticBadge: warn,
-                exchangeStatusHeadline: "실거래소 포지션 보유 중"
-            });
-        }
-    }
-
-    for (const op of opsRows) {
-        const symbol = String(op.symbol ?? "");
-        const side = String(op.side ?? "long").toLowerCase() === "short" ? "short" : "long";
+    for (const row of preview) {
+        const symbol = String(row.symbol ?? "");
+        const side = String(row.side ?? "long").toLowerCase() === "short" ? "short" : "long";
         const key = positionRowKey(symbol, side);
-        if (seen.has(key)) continue;
-        seen.add(key);
-        const entryPx =
-            coerceFinite(op.reference_entry_px) ?? coerceFinite(op.okx_avg_px) ?? null;
-        const stopPx =
-            coerceFinite(op.ledger_stop_px) ?? coerceFinite(op.initial_stop_px_engine_mirror) ?? null;
+        if (seenKeys.has(key)) continue;
+        seenKeys.add(key);
+
+        const op = findOpsRow(symbol, side);
+        const entryPx = coerceFinite(op?.reference_entry_px) ?? coerceFinite(op?.okx_avg_px) ?? null;
+        const stopPx = coerceFinite(op?.ledger_stop_px) ?? coerceFinite(op?.initial_stop_px_engine_mirror) ?? null;
+        const contracts = coerceFinite(row.pos);
+
         slots.push({
             pos: {
                 symbol,
@@ -341,12 +362,10 @@ function buildPositionDisplaySlots(bundle: Bundle): PositionDisplaySlot[] {
                 ...(stopPx !== null ? { stopPrice: stopPx } : {}),
                 leverage: 10,
                 status: "open",
-                _orb_exchange_only: true
+                _orb_exchange_only: true,
+                ...(contracts !== null ? { _orb_contracts: contracts } : {})
             },
-            exchangeDiagnosticBadge:
-                syncStatus && syncStatus !== "ALIGNED"
-                    ? `실거래소 포지션 · 리컨실 ${syncStatus}`
-                    : "실거래소 포지션 (ops_surface)",
+            exchangeDiagnosticBadge: syncStatus === "OKX_ONLY" ? "Paper 원장 미동기화 · OKX_ONLY" : `실거래소 포지션 · ${syncStatus || "ALIGNED"}`,
             exchangeStatusHeadline: "실거래소 포지션 보유 중"
         });
     }
@@ -355,8 +374,7 @@ function buildPositionDisplaySlots(bundle: Bundle): PositionDisplaySlot[] {
 }
 
 function aggregatePortfolioMetricsFromBundle(bundle: Bundle) {
-    const opensRaw = bundle.currentPositions || bundle.openPositions;
-    const opens = Array.isArray(opensRaw) ? opensRaw.filter(p => p && (p.status === undefined || String(p.status) === "open")) : [];
+    const { positions: activePositions } = getActivePositions(bundle);
     const eng = bundle.engineState;
     const symDec =
         eng && typeof eng === "object"
@@ -364,8 +382,9 @@ function aggregatePortfolioMetricsFromBundle(bundle: Bundle) {
                 | Record<string, { decision?: Record<string, unknown> }>
                 | undefined)
             : undefined;
+    
     let totalUnreal = 0;
-    for (const o of opens) {
+    for (const o of activePositions) {
         const n = normalizeOpenPos(o as Record<string, unknown>);
         if (!n) continue;
         const sym = String((o as Record<string, unknown>).symbol ?? "");
@@ -375,7 +394,7 @@ function aggregatePortfolioMetricsFromBundle(bundle: Bundle) {
         const u = unrealizedUsdResolved(n, mark);
         if (typeof u === "number" && Number.isFinite(u)) totalUnreal += u;
     }
-    return { openCount: opens.length, totalUnreal };
+    return { openCount: activePositions.length, totalUnreal };
 }
 
 const SYMBOL_ORDER = ["BTCUSDT", "ETHUSDT"];
