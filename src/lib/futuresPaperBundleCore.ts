@@ -59,6 +59,9 @@ export type FuturesPaperDataBundle = Readonly<{
   eventsRecent: unknown[];
   /** Bundle generation timestamp (epoch ms). */
   generatedAt: number;
+  /** Optional: `runtime/latest-no-entry-audit.json` (also merged server-side via Lightsail). */
+  noEntryAudit?: Record<string, unknown> | null;
+  noEntryAuditBySymbol?: Readonly<Record<string, Record<string, unknown>>> | null;
 }>;
 
 async function readJsonFile(filePath: string): Promise<unknown | null> {
@@ -159,6 +162,25 @@ async function readHealthHistoryTail(dataDir: string, maxLines: number): Promise
   }
 }
 
+async function readNoEntryAuditFile(dataDir: string): Promise<{
+  updatedAt: number;
+  bySymbol: Readonly<Record<string, Record<string, unknown>>>;
+} | null> {
+  const parsed = await readJsonFile(path.join(dataDir, "runtime", "latest-no-entry-audit.json"));
+  if (!parsed || typeof parsed !== "object") return null;
+  const o = parsed as Record<string, unknown>;
+  const updatedAt = typeof o.updatedAt === "number" && Number.isFinite(o.updatedAt) ? o.updatedAt : 0;
+  const rawBy = o.bySymbol;
+  const bySymbol: Record<string, Record<string, unknown>> = {};
+  if (rawBy && typeof rawBy === "object" && !Array.isArray(rawBy)) {
+    for (const [k, v] of Object.entries(rawBy)) {
+      if (!v || typeof v !== "object" || Array.isArray(v)) continue;
+      bySymbol[k] = v as Record<string, unknown>;
+    }
+  }
+  return { updatedAt, bySymbol };
+}
+
 async function readEventsTail(dataDir: string, maxLines: number): Promise<unknown[]> {
   const p = path.join(dataDir, "reports", "events.jsonl");
   try {
@@ -215,12 +237,13 @@ export async function loadFuturesPaperBundleFromDiskRoot(projectRoot: string): P
     readJsonFile(path.join(snaps, "latest-meta.json"))
   ]);
 
-  const [symbolRows, healthHistoryRecent, positionsHistory, openPositions, eventsRecent] = await Promise.all([
+  const [symbolRows, healthHistoryRecent, positionsHistory, openPositions, eventsRecent, noEntryDoc] = await Promise.all([
     Promise.resolve(pickSymbolRows(latestSnapshot)),
     readHealthHistoryTail(dataDir, 10),
     readPositionsHistoryArray(dataDir),
     readPositionsOpenArray(dataDir),
-    readEventsTail(dataDir, 20)
+    readEventsTail(dataDir, 20),
+    readNoEntryAuditFile(dataDir)
   ]);
 
   const generatedAt = Date.now();
@@ -245,6 +268,8 @@ export async function loadFuturesPaperBundleFromDiskRoot(projectRoot: string): P
     openPositions,
     positionsHistory,
     eventsRecent,
-    generatedAt
+    generatedAt,
+    noEntryAudit: noEntryDoc ? { updatedAt: noEntryDoc.updatedAt, bySymbol: noEntryDoc.bySymbol } : null,
+    noEntryAuditBySymbol: noEntryDoc?.bySymbol ?? null
   };
 }

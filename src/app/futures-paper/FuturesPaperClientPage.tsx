@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import Link from "next/link";
 
 import {
@@ -9,6 +9,8 @@ import {
     formatCurrencyUsd,
     formatDateTimeKst,
     formatDateTimeKstShort,
+    formatDateTimeKstNumeric,
+    formatTimeHmssKst,
     formatPercent,
     formatPrice,
     describeSnapshotContext,
@@ -20,7 +22,17 @@ import {
     computeLedgerPerformanceFromHistory,
     INITIAL_CAPITAL_KRW,
     USDKRW_RATE,
-    INITIAL_CAPITAL_USD
+    INITIAL_CAPITAL_USD,
+    pickNoEntryAuditRow,
+    isStaleNoEntryAudit,
+    noEntryJudgmentTsMs,
+    maxSymbolAuditTs,
+    mapNoEntryExpectedMissing,
+    mapNoEntryNextAction,
+    formatSideCandidateEn,
+    formatBoolKo,
+    formatRelativeAgeKo,
+    NO_ENTRY_AUDIT_STALE_MS
 } from "@/lib/futuresPaperFormat";
 
 /** Types */
@@ -66,6 +78,10 @@ type Bundle = {
     trade_control_updated_at?: number;
     trade_control_source?: string;
     paperOperational?: Record<string, unknown>;
+    /** Bundle assembly time (epoch ms); not the same as V2 judgment `ts`. */
+    generatedAt?: number;
+    noEntryAudit?: Record<string, unknown> | null;
+    noEntryAuditBySymbol?: Readonly<Record<string, Record<string, unknown>>> | null;
 };
 
 type NormPos = {
@@ -719,49 +735,168 @@ function PositionMoneyCard({
     );
 }
 
+function deriveOperationalCardLabel(
+    bundle: Bundle,
+    row: Record<string, unknown>,
+    hasPosition: boolean
+): string {
+    if (hasPosition) return "포지션 보유 중";
+    const bAny = bundle as Record<string, unknown>;
+    const tc = bAny.tradeControl as Record<string, unknown> | undefined;
+    const kill = !!(tc?.killSwitch ?? bAny.killSwitch);
+    const engine = bundle.engineState as Record<string, unknown> | undefined;
+    if (kill) return "차단 중";
+    if (engine && engine.entryAllowed === false) return "차단 중";
+    const sig = typeof row.signal === "string" ? row.signal : "";
+    if (sig === "paper_long_candidate" || sig === "paper_short_candidate") return "진입 대기";
+    return "관망 중";
+}
+
 function SymbolStatusCard({
+    bundle,
     row,
     symbolDecisions,
     showInternalTags,
-    hasPosition
+    hasPosition,
+    clientNowMs
 }: {
+    bundle: Bundle;
     row: Record<string, unknown>;
     symbolDecisions: Record<string, unknown> | null;
     showInternalTags: boolean;
     hasPosition: boolean;
+    clientNowMs: number;
 }) {
     const sym = String(row.symbol);
     const symbolData = (symbolDecisions as Record<string, any> | null)?.[sym];
     const rep = getRepresentativeStatus(row, symbolData, hasPosition);
+    const stateLabel = deriveOperationalCardLabel(bundle, row, hasPosition);
+
+    const bRec = bundle as Record<string, unknown>;
+    const auditRow = pickNoEntryAuditRow(bRec, sym);
+    const judgeTs = noEntryJudgmentTsMs(auditRow);
+    const auditMissing = auditRow === null;
+    const stale = judgeTs === null ? true : isStaleNoEntryAudit(judgeTs, clientNowMs);
+    const ageMs = judgeTs !== null ? Math.max(0, clientNowMs - judgeTs) : null;
+
+    const badgeClass =
+        stateLabel === "포지션 보유 중"
+            ? "bg-emerald-50 text-emerald-600 border-emerald-100"
+            : stateLabel === "진입 대기"
+              ? "bg-indigo-50 text-indigo-600 border-indigo-100"
+              : stateLabel === "차단 중"
+                ? "bg-rose-50 text-rose-600 border-rose-100"
+                : "bg-slate-50 text-slate-500 border-slate-100";
+
+    const line = (k: string, v: string, muted = false) => (
+        <div className={muted ? "text-slate-400" : ""}>
+            <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">{k}</span>
+            <p className={`mt-0.5 text-xs font-semibold ${muted ? "text-slate-400 font-normal" : "text-slate-700"}`}>{v}</p>
+        </div>
+    );
+
+    let body: ReactNode;
+    if (hasPosition) {
+        body = (
+            <div className="mt-3 space-y-2">
+                <p className="text-xs text-slate-600">{rep.reason}</p>
+                {!auditMissing && (
+                    <p className="text-[10px] text-slate-400">
+                        (참고) 마지막 무진입 스냅샷:{" "}
+                        {stale
+                            ? `최근 판단 갱신 대기 · ${ageMs !== null ? formatRelativeAgeKo(ageMs) : "—"}`
+                            : `${formatTimeHmssKst(judgeTs)} · ${ageMs !== null ? formatRelativeAgeKo(ageMs) : "—"}`}
+                    </p>
+                )}
+            </div>
+        );
+    } else if (auditMissing) {
+        body = (
+            <div className="mt-3 space-y-2">
+                <p className="rounded-md border border-amber-100 bg-amber-50/60 px-2 py-1.5 text-xs font-medium text-amber-900">
+                    무진입 감사 데이터 없음 · API 필드 noEntryAuditBySymbol 또는 엔진 스냅샷 확인
+                </p>
+                <p className="text-xs font-medium text-slate-600">{describeSnapshotContext(row)}</p>
+                <p className="text-[10px] text-slate-400">
+                    상태 요약(내부): {rep.label} — {rep.reason}
+                </p>
+            </div>
+        );
+    } else if (stale) {
+        body = (
+            <div className="mt-3 space-y-3">
+                <p className="rounded-md border border-amber-200 bg-amber-50/50 px-2 py-1.5 text-xs font-bold text-amber-900">
+                    최근 판단 갱신 대기
+                </p>
+                <p className="text-xs text-slate-500">
+                    마지막 판단:{" "}
+                    {judgeTs !== null
+                        ? `${formatTimeHmssKst(judgeTs)} · ${formatRelativeAgeKo(ageMs ?? 0)}`
+                        : "—"}
+                </p>
+                <p className="text-[10px] text-slate-400">
+                    {NO_ENTRY_AUDIT_STALE_MS / 1000}초 이상 경과한 사유는 현재 판단으로 표시하지 않습니다.
+                </p>
+            </div>
+        );
+    } else {
+        const exp = auditRow.expected_missing_condition;
+        const next = auditRow.expected_next_action;
+        const zone = auditRow.zone != null ? String(auditRow.zone) : "—";
+        const q =
+            auditRow.entry_quality_grade != null || typeof auditRow.quality_score === "number"
+                ? `${auditRow.entry_quality_grade != null ? String(auditRow.entry_quality_grade) : "—"}${
+                      typeof auditRow.quality_score === "number" ? `(${auditRow.quality_score})` : ""
+                  }`
+                : "—";
+
+        body = (
+            <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                {line("무진입 사유", mapNoEntryExpectedMissing(exp))}
+                {line("다음 대기", mapNoEntryNextAction(next))}
+                {line("후보 방향", formatSideCandidateEn(auditRow.trend_side_candidate))}
+                {line("구간", zone)}
+                {line("품질", q)}
+                {line("추격 차단", formatBoolKo(auditRow.chase_blocked))}
+                {line("리테스트 필요", formatBoolKo(auditRow.retest_required))}
+                {line("지지 재확인 필요", formatBoolKo(auditRow.reclaim_required))}
+                <div className="sm:col-span-2">
+                    {line(
+                        "마지막 판단",
+                        judgeTs !== null
+                            ? `${formatTimeHmssKst(judgeTs)} · ${formatRelativeAgeKo(ageMs ?? 0)}`
+                            : "—"
+                    )}
+                </div>
+            </div>
+        );
+    }
 
     return (
         <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
             <div className="flex items-center justify-between">
-                <div className="font-mono text-lg font-bold text-slate-800 notranslate" translate="no">{sym}</div>
-                <div
-                    className={`rounded-full px-2.5 py-0.5 text-[10px] font-bold border ${rep.label === "포지션 보유 중" ? "bg-emerald-50 text-emerald-600 border-emerald-100" :
-                        rep.label === "진입 검토 중" ? "bg-amber-50 text-amber-600 border-amber-100" :
-                            "bg-slate-50 text-slate-400 border-slate-100"
-                        }`}
-                >
-                    {rep.label}
+                <div className="font-mono text-lg font-bold text-slate-800 notranslate" translate="no">
+                    {sym}
                 </div>
+                <div className={`rounded-full px-2.5 py-0.5 text-[10px] font-bold border ${badgeClass}`}>{stateLabel}</div>
             </div>
 
-            <div className="mt-4 space-y-1">
-                <p className="text-sm font-bold text-slate-700">{rep.label}</p>
-                <p className="text-xs font-medium text-slate-400">{rep.reason}</p>
+            <div className="mt-2">
+                <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">상태</p>
+                <p className="text-sm font-bold text-slate-800">{stateLabel}</p>
             </div>
+
+            {body}
 
             {showInternalTags && (
                 <div className="mt-4 space-y-4 border-t border-slate-100 pt-4">
                     <div className="grid grid-cols-2 gap-4">
                         <div>
-                            <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">데이터 정보</p>
+                            <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">스냅샷 맥락</p>
                             <p className="mt-0.5 text-xs font-medium text-slate-600">{describeSnapshotContext(row)}</p>
                         </div>
                         <div>
-                            <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">마지막 업데이트</p>
+                            <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">틱 수신 시각</p>
                             <p className="mt-0.5 text-[10px] text-slate-400">{formatDateTimeKst(row.fetchedAt)}</p>
                         </div>
                     </div>
@@ -1037,6 +1172,7 @@ export default function FuturesPaperClientPage({ initialBundle }: { initialBundl
     const [err, setErr] = useState<string | null>(null);
     const [isRefreshing, setIsRefreshing] = useState(false);
     const [lastUpdated, setLastUpdated] = useState<Date>(new Date());
+    const [clientNowMs, setClientNowMs] = useState(() => Date.now());
     const [showInternalTags, setShowInternalTags] = useState(false);
     const [isProcessingControl, setIsProcessingControl] = useState(false);
 
@@ -1061,6 +1197,11 @@ export default function FuturesPaperClientPage({ initialBundle }: { initialBundl
             refreshData();
         }, 5000);
         return () => clearInterval(interval);
+    }, []);
+
+    useEffect(() => {
+        const id = window.setInterval(() => setClientNowMs(Date.now()), 1000);
+        return () => window.clearInterval(id);
     }, []);
 
     const handleControlAction = async (action: string, params: any = {}) => {
@@ -1103,6 +1244,14 @@ export default function FuturesPaperClientPage({ initialBundle }: { initialBundl
     const assetDisplayLabel = typeof paperOperational?.current_asset_display_label === "string" ? paperOperational.current_asset_display_label : "";
     const assetDisplaySource = typeof paperOperational?.current_asset_display_source === "string" ? paperOperational.current_asset_display_source : "";
     const paperEquityRefKrw = coerceFinite(paperOperational?.paper_equity_reference_krw);
+
+    const bRecFull = bundle as Record<string, unknown>;
+    const lastApiMs = lastUpdated.getTime();
+    const maxV2Ts = maxSymbolAuditTs(bRecFull, SYMBOL_ORDER);
+    const genAt = typeof bundle.generatedAt === "number" && Number.isFinite(bundle.generatedAt) ? bundle.generatedAt : null;
+    const noEntryBy = bundle.noEntryAuditBySymbol;
+    const auditKeys =
+        noEntryBy && typeof noEntryBy === "object" ? Object.keys(noEntryBy).length : 0;
     const sourceLabel =
         assetDisplaySource === "okx_live_wallet"
             ? "OKX 실잔고 기준"
@@ -1177,9 +1326,11 @@ export default function FuturesPaperClientPage({ initialBundle }: { initialBundl
                     </div>
                     <div className="flex items-center gap-4">
                         <div className="text-right">
-                            <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">마지막 갱신</p>
+                            <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                                마지막 API 갱신 수신
+                            </p>
                             <p className="text-xs font-medium text-slate-500">
-                                {formatDateTimeKstShort(lastUpdated.getTime())}
+                                {formatDateTimeKstNumeric(lastApiMs)}
                                 {isRefreshing && <span className="ml-2 animate-pulse text-amber-500">...</span>}
                             </p>
                         </div>
@@ -1202,6 +1353,53 @@ export default function FuturesPaperClientPage({ initialBundle }: { initialBundl
 
                 {bundle?.configured ? (
                     <>
+                        <section className="rounded-xl border border-slate-200 bg-white p-4 text-xs shadow-sm">
+                            <h2 className="text-[10px] font-black uppercase tracking-widest text-slate-400">
+                                시간 · 데이터 정합성
+                            </h2>
+                            <div className="mt-3 grid gap-y-2 sm:grid-cols-2 sm:gap-x-6">
+                                <div className="space-y-1">
+                                    <p className="font-bold text-slate-500">현재 시각</p>
+                                    <p className="font-mono font-semibold text-slate-900">
+                                        현재 KST: {formatDateTimeKstNumeric(clientNowMs)}
+                                    </p>
+                                </div>
+                                <div className="space-y-1 border-t border-slate-100 pt-2 sm:border-t-0 sm:pt-0">
+                                    <p className="font-bold text-slate-500">데이터 상태</p>
+                                    <p className="text-slate-700">
+                                        마지막 API 갱신:{" "}
+                                        <span className="font-mono font-medium">{formatDateTimeKstNumeric(lastApiMs)}</span>
+                                    </p>
+                                    <p className="text-slate-600">
+                                        API 수신 경과: {formatRelativeAgeKo(Math.max(0, clientNowMs - lastApiMs))}
+                                    </p>
+                                    <p className="text-slate-700">
+                                        마지막 V2 판단(BTC·ETH 스냅샷 최대):{" "}
+                                        <span className="font-mono font-medium">
+                                            {maxV2Ts !== null ? formatDateTimeKstNumeric(maxV2Ts) : "기록 없음"}
+                                        </span>
+                                    </p>
+                                    <p className="text-slate-600">
+                                        V2 판단 데이터 나이:{" "}
+                                        {maxV2Ts !== null
+                                            ? formatRelativeAgeKo(Math.max(0, clientNowMs - maxV2Ts))
+                                            : "—"}
+                                    </p>
+                                    {genAt !== null && (
+                                        <p className="text-[11px] text-slate-400">
+                                            참고 서버 번들 generatedAt: {formatDateTimeKstNumeric(genAt)} · 경과{" "}
+                                            {formatRelativeAgeKo(Math.max(0, clientNowMs - genAt))}
+                                        </p>
+                                    )}
+                                    {auditKeys === 0 && (
+                                        <p className="rounded-md border border-rose-100 bg-rose-50 px-2 py-1 font-medium text-rose-900">
+                                            무진입 감사 데이터 없음 — 응답에 noEntryAuditBySymbol이 없습니다.
+                                        </p>
+                                    )}
+                                </div>
+                            </div>
+                        </section>
+
                         {/* 1. 운영 제어 */}
                         <OperatorControlSection
                             bundle={bundle}
@@ -1292,16 +1490,19 @@ export default function FuturesPaperClientPage({ initialBundle }: { initialBundl
                             <h2 className="text-xs font-bold uppercase tracking-widest text-slate-500">자산별 상태</h2>
                             <div className="grid gap-4 sm:grid-cols-2">
                                 {SYMBOL_ORDER.map((sym) => {
-                                    const row = bundle.symbolRows.find((r) => r.symbol === sym);
-                                    if (!row) return null;
+                                    const row =
+                                        bundle.symbolRows.find((r) => r.symbol === sym) ??
+                                        ({ symbol: sym, signal: "none" } as Record<string, unknown>);
                                     const hasPos = positionSlots.some((s) => String(s.pos.symbol) === sym);
                                     return (
                                         <SymbolStatusCard
                                             key={sym}
+                                            bundle={bundle}
                                             row={row}
                                             symbolDecisions={symbolDecisions}
                                             showInternalTags={showInternalTags}
                                             hasPosition={hasPos}
+                                            clientNowMs={clientNowMs}
                                         />
                                     );
                                 })}

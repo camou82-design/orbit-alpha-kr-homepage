@@ -29,7 +29,9 @@ function emptyBundle(configHint: string): FuturesPaperDataBundle {
     openPositions: [],
     positionsHistory: [],
     eventsRecent: [],
-    generatedAt: Date.now()
+    generatedAt: Date.now(),
+    noEntryAudit: null,
+    noEntryAuditBySymbol: null
   };
 }
 
@@ -94,6 +96,11 @@ async function loadFromRemoteApi(baseUrl: string, secret: string): Promise<Futur
 
   const withDefaults: FuturesPaperDataBundle = {
     ...b,
+    noEntryAudit: (b as any).noEntryAudit ?? null,
+    noEntryAuditBySymbol:
+      typeof (b as any).noEntryAuditBySymbol === "object" && (b as any).noEntryAuditBySymbol !== null
+        ? (b as any).noEntryAuditBySymbol
+        : null,
     summaryRange: (b as any).summaryRange ?? null,
     summaryTrend: (b as any).summaryTrend ?? null,
     engineState: (b as any).engineState ?? null,

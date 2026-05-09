@@ -4,6 +4,146 @@
 
 const KST_TZ = "Asia/Seoul";
 
+/** V2 무진입 감사 `ts`(심별) staleness 기준(ms). */
+export const NO_ENTRY_AUDIT_STALE_MS = 180_000;
+
+/** `YYYY-MM-DD HH:mm:ss KST` (표시 규격; 브라우저 `Asia/Seoul` 기준). */
+export function formatDateTimeKstNumeric(ms: unknown, emptyLabel = "기록 없음"): string {
+  if (typeof ms !== "number" || !Number.isFinite(ms)) return emptyLabel;
+  try {
+    const s = new Date(ms).toLocaleString("sv-SE", { timeZone: KST_TZ });
+    return `${s} KST`;
+  } catch {
+    return emptyLabel;
+  }
+}
+
+/** `HH:mm:ss KST`. */
+export function formatTimeHmssKst(ms: unknown, emptyLabel = "—"): string {
+  if (typeof ms !== "number" || !Number.isFinite(ms)) return emptyLabel;
+  try {
+    const t = new Date(ms).toLocaleTimeString("sv-SE", {
+      timeZone: KST_TZ,
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hour12: false
+    });
+    return `${t} KST`;
+  } catch {
+    return emptyLabel;
+  }
+}
+
+/**
+ * 경과 시간 한글 표기 (양수 ms 기준).
+ * 90초 미만은 초, 그 외 분(120분까지), 그 이상 시간 혼합.
+ */
+export function formatRelativeAgeKo(ageMs: number, emptyLabel = "—"): string {
+  if (!Number.isFinite(ageMs) || ageMs < 0) return emptyLabel;
+  const sec = Math.floor(ageMs / 1000);
+  if (sec < 90) return `${sec}초 전`;
+  const min = Math.floor(sec / 60);
+  if (min < 120) return `${min}분 전`;
+  const h = Math.floor(min / 60);
+  const m = min % 60;
+  return `${h}시간 ${m}분 전`;
+}
+
+export type NoEntryAuditSnapshotRow = Readonly<
+  Record<string, unknown> & {
+    ts?: number;
+    symbol?: string;
+    expected_missing_condition?: unknown;
+    expected_next_action?: unknown;
+    side_veto_detail?: unknown;
+  }
+>;
+
+export function pickNoEntryAuditRow(bundle: Record<string, unknown> | null | undefined, sym: string): NoEntryAuditSnapshotRow | null {
+  const rawBy =
+    (bundle?.noEntryAuditBySymbol as Record<string, unknown> | undefined | null) ??
+    (bundle?.noEntryAudit &&
+      typeof bundle.noEntryAudit === "object" &&
+      !Array.isArray(bundle.noEntryAudit) &&
+      (bundle.noEntryAudit as Record<string, unknown>).bySymbol &&
+      typeof (bundle.noEntryAudit as Record<string, unknown>).bySymbol === "object"
+      ? ((bundle.noEntryAudit as Record<string, unknown>).bySymbol as Record<string, unknown>)
+      : null);
+  if (!rawBy || typeof rawBy !== "object") return null;
+  const u = sym.trim().toUpperCase();
+  const row = rawBy[sym] ?? rawBy[u];
+  if (!row || typeof row !== "object" || Array.isArray(row)) return null;
+  return row as NoEntryAuditSnapshotRow;
+}
+
+export function noEntryJudgmentTsMs(row: NoEntryAuditSnapshotRow | null): number | null {
+  const t = row?.ts;
+  return typeof t === "number" && Number.isFinite(t) ? t : null;
+}
+
+export function isStaleNoEntryAudit(ts: unknown, clientNowMs: number): boolean {
+  if (typeof ts !== "number" || !Number.isFinite(ts)) return true;
+  return clientNowMs - ts >= NO_ENTRY_AUDIT_STALE_MS;
+}
+
+/** 심별 `ts` 기준 최신 V2 무진입 타임스탬프 하나로 요약할 때 사용. */
+export function maxSymbolAuditTs(bundle: Record<string, unknown> | null | undefined, symbols: readonly string[]): number | null {
+  let mx: number | null = null;
+  for (const sym of symbols) {
+    const r = pickNoEntryAuditRow(bundle, sym);
+    const t = noEntryJudgmentTsMs(r);
+    if (t !== null && (mx === null || t > mx)) mx = t;
+  }
+  return mx;
+}
+
+const NO_ENTRY_EXPECTED_MISSING_KO: Record<string, string> = {
+  SHOCK_REACTION_WATCH_MID_CHASE_BLOCKED: "상승/하락 충격 후 중간 구간 추격 진입 차단",
+  SHOCK_UP_RECLAIM_NOT_CONFIRMED: "상승 재돌파 후 지지 재확인 미완료",
+  SHOCK_UP_MID_RETEST_REQUIRED: "상승 충격 후 중간 구간 리테스트 대기",
+  SHOCK_DOWN_BREAKDOWN_RETEST_NOT_CONFIRMED: "하락 이탈 후 리테스트 실패 확인 미완료",
+  MIN_QUALITY_NOT_MET: "진입 품질 점수 부족",
+  TREND_ENTRY_NOT_PROMOTED: "추세 후보는 있으나 V2 승격 조건 미충족",
+  SIDE_NONE_AFTER_VETO: "후처리 후 유효 방향 없음"
+};
+
+const NO_ENTRY_NEXT_ACTION_KO: Record<string, string> = {
+  WAIT_FOR_RETEST_OR_RECLAIM_CONFIRMATION: "리테스트 / 지지 재확인 대기",
+  WAIT_FOR_BREAKDOWN_RETEST_FAILURE: "하락 이탈 리테스트 결과 대기",
+  WAIT_FOR_VALID_SIDE_CONFIRMATION: "유효 방향 재확인 대기",
+  WAIT_FOR_RECOVERY_MODE_CLEAR_OR_HIGH_CONFIDENCE_RETEST: "복구 모드 해제 또는 고신뢰 리테스트 대기",
+  WAIT_FOR_VALID_ENTRY_SIGNAL: "진입 신호 재확인 대기",
+  WAIT_FOR_TREND_CONFIRMATION: "추세 재확인 대기",
+  WAIT_FOR_RANGE_TREND_ALIGNMENT: "레인지·추세 정렬 재확인 대기",
+  WAIT_FOR_PROMOTION_CONFIRMATION: "V2 승격 조건 재확인 대기"
+};
+
+export function mapNoEntryExpectedMissing(code: unknown): string {
+  if (code === null || code === undefined || code === "") return "—";
+  const k = String(code);
+  return NO_ENTRY_EXPECTED_MISSING_KO[k] ?? k;
+}
+
+export function mapNoEntryNextAction(code: unknown): string {
+  if (code === null || code === undefined || code === "") return "—";
+  const k = String(code);
+  return NO_ENTRY_NEXT_ACTION_KO[k] ?? k;
+}
+
+export function formatSideCandidateEn(x: unknown): string {
+  if (x === "long") return "Long";
+  if (x === "short") return "Short";
+  if (x === null || x === undefined || String(x).toLowerCase() === "none") return "none";
+  return String(x);
+}
+
+export function formatBoolKo(v: unknown): string {
+  if (v === true) return "예";
+  if (v === false) return "아니오";
+  return "—";
+}
+
 /** True when value is "empty" for display (not including valid numeric 0). */
 export function isDisplayEmpty(value: unknown): boolean {
   if (value === null || value === undefined) return true;
