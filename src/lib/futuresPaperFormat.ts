@@ -105,7 +105,18 @@ const NO_ENTRY_EXPECTED_MISSING_KO: Record<string, string> = {
   SHOCK_DOWN_BREAKDOWN_RETEST_NOT_CONFIRMED: "하락 이탈 후 리테스트 실패 확인 미완료",
   MIN_QUALITY_NOT_MET: "진입 품질 점수 부족",
   TREND_ENTRY_NOT_PROMOTED: "추세 후보는 있으나 V2 승격 조건 미충족",
-  SIDE_NONE_AFTER_VETO: "후처리 후 유효 방향 없음"
+  SIDE_NONE_AFTER_VETO: "후처리 후 유효 방향 없음",
+  TREND_CANDIDATE_NOT_PROMOTED_DETAIL: "추세 후보는 있으나 진입 확정 조건 부족",
+  TREND_PROMOTION_MISSING_RETEST: "추세 후보는 있으나 리테스트 확인 부족",
+  TREND_PROMOTION_MISSING_PULLBACK_CONFIRM: "추세 후보는 있으나 눌림 지지 확인 부족",
+  TREND_PROMOTION_MISSING_VOLUME_CONFIRM: "추세 후보는 있으나 거래량 확인 부족",
+  TREND_PROMOTION_HTF_CONFLICT: "추세 후보는 있으나 상위봉 방향 충돌",
+  TREND_PROMOTION_QUALITY_WEAK: "추세 후보 품질 부족",
+  TREND_PROMOTION_ZONE_UNFAVORABLE: "현재 가격 구간이 진입에 불리함",
+  TREND_PROMOTION_EXPECTED_MOVE_TOO_SMALL: "기대 수익폭 부족",
+  TREND_PROMOTION_STOP_PLAN_MISSING: "손절 계획 미확정",
+  TREND_PROMOTION_PROFIT_LOSS_DISTANCE_BAD: "손익 거리 비율 불리",
+  TREND_PROMOTION_WAIT_RECHECK: "다음 캔들 재확인 대기"
 };
 
 const NO_ENTRY_NEXT_ACTION_KO: Record<string, string> = {
@@ -116,19 +127,125 @@ const NO_ENTRY_NEXT_ACTION_KO: Record<string, string> = {
   WAIT_FOR_VALID_ENTRY_SIGNAL: "진입 신호 재확인 대기",
   WAIT_FOR_TREND_CONFIRMATION: "추세 재확인 대기",
   WAIT_FOR_RANGE_TREND_ALIGNMENT: "레인지·추세 정렬 재확인 대기",
-  WAIT_FOR_PROMOTION_CONFIRMATION: "V2 승격 조건 재확인 대기"
+  WAIT_FOR_PROMOTION_CONFIRMATION: "V2 승격 조건 재확인 대기",
+  WAIT_FOR_HTF_ALIGNMENT: "상위봉 정렬 대기"
 };
 
+/** 엔진 내부 토큰(SCREAMING_SNAKE) 여부 — 본문에 raw로 노출하지 않음. */
+function looksLikeEngineCodeToken(s: string): boolean {
+  return /^[A-Z][A-Z0-9_]*$/.test(s.trim());
+}
+
+/**
+ * 운영 카드 본문용: 매핑된 한글만. 미매핑 내부 코드는 일반 문구로 대체( raw는 `noEntryExpectedMissingRawForDetail` ).
+ */
 export function mapNoEntryExpectedMissing(code: unknown): string {
   if (code === null || code === undefined || code === "") return "—";
-  const k = String(code);
-  return NO_ENTRY_EXPECTED_MISSING_KO[k] ?? k;
+  const k = String(code).trim();
+  if (!k) return "—";
+  const mapped = NO_ENTRY_EXPECTED_MISSING_KO[k];
+  if (mapped) return mapped;
+  if (looksLikeEngineCodeToken(k)) return "무진입 사유(내부 코드·아래 보조 참조)";
+  return k;
+}
+
+/** 보조 텍스트(작은 monospace). 매핑된 코드는 null. */
+export function noEntryExpectedMissingRawForDetail(code: unknown): string | null {
+  if (code === null || code === undefined || code === "") return null;
+  const k = String(code).trim();
+  if (!k) return null;
+  if (NO_ENTRY_EXPECTED_MISSING_KO[k]) return null;
+  if (looksLikeEngineCodeToken(k)) return k;
+  return null;
 }
 
 export function mapNoEntryNextAction(code: unknown): string {
   if (code === null || code === undefined || code === "") return "—";
-  const k = String(code);
-  return NO_ENTRY_NEXT_ACTION_KO[k] ?? k;
+  const k = String(code).trim();
+  if (!k) return "—";
+  const mapped = NO_ENTRY_NEXT_ACTION_KO[k];
+  if (mapped) return mapped;
+  if (looksLikeEngineCodeToken(k)) return "다음 대기(내부 코드·아래 보조 참조)";
+  return k;
+}
+
+export function noEntryNextActionRawForDetail(code: unknown): string | null {
+  if (code === null || code === undefined || code === "") return null;
+  const k = String(code).trim();
+  if (!k) return null;
+  if (NO_ENTRY_NEXT_ACTION_KO[k]) return null;
+  if (looksLikeEngineCodeToken(k)) return k;
+  return null;
+}
+
+const HTF_ENTRY_POLICY_KO: Record<string, string> = {
+  PROBE_ONLY: "소형 진입만 허용 가능",
+  ALLOW_WITH_MACRO_RISK: "상위봉 위험 있음, 조건 충족 시 제한 진입 가능",
+  ALLOW: "상위봉 정렬 양호",
+  HOLD: "상위봉 정렬 대기",
+  WAIT_FOR_HTF_ALIGNMENT: "상위봉 정렬 대기",
+  HTF_POLICY_BLOCK: "상위봉 방향 충돌로 진입 차단"
+};
+
+export function mapHtfEntryPolicy(code: unknown): string {
+  if (code === null || code === undefined || code === "") return "—";
+  const k = String(code).trim();
+  return HTF_ENTRY_POLICY_KO[k] ?? (looksLikeEngineCodeToken(k) ? "HTF 정책(내부 코드)" : k);
+}
+
+export function htfEntryPolicyRawForDetail(code: unknown): string | null {
+  if (code === null || code === undefined || code === "") return null;
+  const k = String(code).trim();
+  if (!k) return null;
+  if (HTF_ENTRY_POLICY_KO[k]) return null;
+  if (looksLikeEngineCodeToken(k)) return k;
+  return null;
+}
+
+const MACRO_SOURCE_KO: Record<string, string> = {
+  actual_candles: "실제 캔들 기반",
+  partial_actual_candles: "일부 실제 캔들 기반",
+  market_subtype_proxy: "장세 프록시 기반"
+};
+
+export function mapMacroSourceDisplay(code: unknown): string {
+  if (code === null || code === undefined || code === "") return "—";
+  const k = String(code).trim();
+  return MACRO_SOURCE_KO[k] ?? k;
+}
+
+export function formatHtfBiasField(v: unknown): string {
+  if (v === null || v === undefined || v === "") return "—";
+  if (typeof v === "boolean") return v ? "예" : "아니오";
+  if (typeof v === "number" && Number.isFinite(v)) return String(v);
+  const s = String(v).trim();
+  return s.length > 0 ? s : "—";
+}
+
+export function formatHtfSizeMultiplier(v: unknown): string {
+  if (v === null || v === undefined || v === "") return "—";
+  if (typeof v === "number" && Number.isFinite(v)) return String(v);
+  const n = Number(v);
+  return Number.isFinite(n) ? String(n) : "—";
+}
+
+/** 감사 스냅샷에 HTF 관련 키가 하나라도 있으면 true */
+export function noEntryRowHasHtf(row: Record<string, unknown> | null | undefined): boolean {
+  if (!row || typeof row !== "object") return false;
+  const keys = [
+    "htf_entry_policy",
+    "counter_trend_risk",
+    "htf_size_multiplier",
+    "htf_requires_stronger_confirmation",
+    "htf_hard_block_reason",
+    "macro_source",
+    "htf_5m_bias",
+    "htf_15m_bias",
+    "htf_1h_bias",
+    "htf_4h_bias",
+    "htf_1d_bias"
+  ] as const;
+  return keys.some((k) => row[k] !== null && row[k] !== undefined && row[k] !== "");
 }
 
 export function formatSideCandidateEn(x: unknown): string {

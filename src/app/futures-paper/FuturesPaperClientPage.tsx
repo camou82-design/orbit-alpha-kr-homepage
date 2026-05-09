@@ -29,8 +29,17 @@ import {
     maxSymbolAuditTs,
     mapNoEntryExpectedMissing,
     mapNoEntryNextAction,
+    noEntryExpectedMissingRawForDetail,
+    noEntryNextActionRawForDetail,
+    mapHtfEntryPolicy,
+    htfEntryPolicyRawForDetail,
+    mapMacroSourceDisplay,
+    formatHtfBiasField,
+    formatHtfSizeMultiplier,
+    noEntryRowHasHtf,
     formatSideCandidateEn,
     formatBoolKo,
+    formatEmpty,
     formatRelativeAgeKo,
     NO_ENTRY_AUDIT_STALE_MS
 } from "@/lib/futuresPaperFormat";
@@ -788,10 +797,29 @@ function SymbolStatusCard({
                 ? "bg-rose-50 text-rose-600 border-rose-100"
                 : "bg-slate-50 text-slate-500 border-slate-100";
 
-    const line = (k: string, v: string, muted = false) => (
-        <div className={muted ? "text-slate-400" : ""}>
-            <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">{k}</span>
-            <p className={`mt-0.5 text-xs font-semibold ${muted ? "text-slate-400 font-normal" : "text-slate-700"}`}>{v}</p>
+    const auditTextBlock = (title: string, summary: string, rawAux?: string | null, mutedSummary = false) => (
+        <div className="min-w-0 shrink-0">
+            <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">{title}</p>
+            <p
+                className={`mt-1 text-sm leading-relaxed break-words whitespace-normal ${mutedSummary ? "font-normal text-slate-400" : "font-semibold text-slate-800"}`}
+                style={{ overflowWrap: "anywhere", wordBreak: "break-word" }}
+            >
+                {summary}
+            </p>
+            {rawAux ? (
+                <p className="mt-1 font-mono text-[10px] leading-snug break-all text-slate-400" title={rawAux}>
+                    코드 참조 · {rawAux}
+                </p>
+            ) : null}
+        </div>
+    );
+
+    const kvLine = (label: string, val: string, muted = false) => (
+        <div className={`min-w-0 ${muted ? "text-slate-400" : ""}`}>
+            <span className="inline-block max-w-full text-[10px] font-bold uppercase tracking-wider text-slate-400">{label}</span>
+            <p className={`mt-0.5 text-xs leading-relaxed break-words ${muted ? "font-normal text-slate-400" : "font-semibold text-slate-700"}`} style={{ overflowWrap: "anywhere", wordBreak: "break-word" }}>
+                {val}
+            </p>
         </div>
     );
 
@@ -840,6 +868,7 @@ function SymbolStatusCard({
             </div>
         );
     } else {
+        const rowRec = auditRow as Record<string, unknown>;
         const exp = auditRow.expected_missing_condition;
         const next = auditRow.expected_next_action;
         const zone = auditRow.zone != null ? String(auditRow.zone) : "—";
@@ -850,30 +879,71 @@ function SymbolStatusCard({
                   }`
                 : "—";
 
+        const htfPolicy = auditRow.htf_entry_policy;
+        const counterTrend = auditRow.counter_trend_risk;
+        const showHtf = noEntryRowHasHtf(rowRec);
+
         body = (
-            <div className="mt-3 grid gap-2 sm:grid-cols-2">
-                {line("무진입 사유", mapNoEntryExpectedMissing(exp))}
-                {line("다음 대기", mapNoEntryNextAction(next))}
-                {line("후보 방향", formatSideCandidateEn(auditRow.trend_side_candidate))}
-                {line("구간", zone)}
-                {line("품질", q)}
-                {line("추격 차단", formatBoolKo(auditRow.chase_blocked))}
-                {line("리테스트 필요", formatBoolKo(auditRow.retest_required))}
-                {line("지지 재확인 필요", formatBoolKo(auditRow.reclaim_required))}
-                <div className="sm:col-span-2">
-                    {line(
-                        "마지막 판단",
-                        judgeTs !== null
-                            ? `${formatTimeHmssKst(judgeTs)} · ${formatRelativeAgeKo(ageMs ?? 0)}`
-                            : "—"
-                    )}
+            <div className="mt-3 min-w-0 space-y-4 overflow-hidden">
+                <div className="space-y-4 border-b border-slate-100 pb-4">
+                    {auditTextBlock("무진입 사유", mapNoEntryExpectedMissing(exp), noEntryExpectedMissingRawForDetail(exp))}
+                    {auditTextBlock("다음 대기", mapNoEntryNextAction(next), noEntryNextActionRawForDetail(next))}
+                </div>
+
+                {showHtf ? (
+                    <div className="min-w-0 space-y-3 rounded-lg border border-slate-100 bg-slate-50/90 p-3">
+                        <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">상위봉(HTF)</p>
+                        <div className="space-y-3 text-xs">
+                            {auditTextBlock("상위봉 판세·소스", mapMacroSourceDisplay(auditRow.macro_source), null)}
+                            {kvLine("5m bias", formatHtfBiasField(rowRec.htf_5m_bias))}
+                            {kvLine("15m bias", formatHtfBiasField(rowRec.htf_15m_bias))}
+                            {kvLine("1h bias", formatHtfBiasField(rowRec.htf_1h_bias))}
+                            {kvLine("4h bias", formatHtfBiasField(rowRec.htf_4h_bias))}
+                            {kvLine("1d bias", formatHtfBiasField(rowRec.htf_1d_bias))}
+                            <div>{auditTextBlock("HTF 정책", mapHtfEntryPolicy(htfPolicy), htfEntryPolicyRawForDetail(htfPolicy))}</div>
+                            {kvLine(
+                                "상위봉 역방향 위험",
+                                counterTrend === true || counterTrend === false ? formatBoolKo(counterTrend) : formatEmpty(counterTrend, "—")
+                            )}
+                            {kvLine("사이즈 배율", formatHtfSizeMultiplier(rowRec.htf_size_multiplier))}
+                            {kvLine(
+                                "강한 확인 필요",
+                                rowRec.htf_requires_stronger_confirmation === true || rowRec.htf_requires_stronger_confirmation === false
+                                    ? formatBoolKo(rowRec.htf_requires_stronger_confirmation)
+                                    : formatEmpty(rowRec.htf_requires_stronger_confirmation, "—")
+                            )}
+                            {rowRec.htf_hard_block_reason != null && String(rowRec.htf_hard_block_reason).trim() !== "" ? (
+                                <div className="min-w-0 rounded border border-amber-100/80 bg-white/60 px-2 py-1.5">
+                                    <p className="text-[10px] font-bold uppercase tracking-wider text-amber-700/90">HTF 단단 차단 근거</p>
+                                    <p className="mt-1 font-mono text-[10px] leading-snug break-all text-amber-900/80">
+                                        {String(rowRec.htf_hard_block_reason)}
+                                    </p>
+                                </div>
+                            ) : null}
+                        </div>
+                    </div>
+                ) : null}
+
+                <div className="grid grid-cols-1 gap-x-3 gap-y-3 sm:grid-cols-2">
+                    {kvLine("후보 방향", formatSideCandidateEn(auditRow.trend_side_candidate))}
+                    {kvLine("구간", zone)}
+                    {kvLine("품질", q)}
+                    {kvLine("추격 차단", formatBoolKo(auditRow.chase_blocked))}
+                    {kvLine("리테스트 필요", formatBoolKo(auditRow.retest_required))}
+                    {kvLine("지지 재확인 필요", formatBoolKo(auditRow.reclaim_required))}
+                    <div className="min-w-0 sm:col-span-2">
+                        {kvLine(
+                            "마지막 판단",
+                            judgeTs !== null ? `${formatTimeHmssKst(judgeTs)} · ${formatRelativeAgeKo(ageMs ?? 0)}` : "—"
+                        )}
+                    </div>
                 </div>
             </div>
         );
     }
 
     return (
-        <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+        <div className="min-w-0 overflow-hidden rounded-lg border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
             <div className="flex items-center justify-between">
                 <div className="font-mono text-lg font-bold text-slate-800 notranslate" translate="no">
                     {sym}
