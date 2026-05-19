@@ -318,6 +318,45 @@ function getActivePositions(bundle: Bundle): { positions: Array<Record<string, a
 }
 
 /**
+ * OKX preview row + 현재가(mark)로 추정 미실현 손익 계산
+ * upl 필드 없을 때 사용. 반드시 "(추정)" 레이블 부착 필요.
+ */
+function estimateOkxPnl(
+    okx: Record<string, unknown>,
+    markFallback: number | null
+): { pnl: number | null; pct: number | null; isEstimated: boolean } {
+    const upl = coerceFinite(okx.upl) ?? coerceFinite(okx.unrealizedPnl);
+    const uplRatio = coerceFinite(okx.uplRatio) ?? coerceFinite(okx.unrealizedPnlPct);
+    if (upl !== null) return { pnl: upl, pct: uplRatio, isEstimated: false };
+
+    const avgPx = coerceFinite(okx.avgPx) ?? coerceFinite(okx.avg_px);
+    const baseQty = coerceFinite(okx.baseQty);
+    const mark = coerceFinite(okx.markPx) ?? coerceFinite(okx.mark_px) ?? markFallback;
+    const notional = coerceFinite(okx.notionalUsd);
+    const sideStr = String(okx.side ?? okx.posSide ?? "long").toLowerCase();
+
+    if (avgPx !== null && mark !== null && avgPx > 0) {
+        // baseQty 있으면 BTC × 가격차, 없으면 notional 기준
+        let pnl: number | null = null;
+        if (baseQty !== null && baseQty > 0) {
+            pnl = sideStr === "short"
+                ? (avgPx - mark) * baseQty
+                : (mark - avgPx) * baseQty;
+        } else if (notional !== null && notional > 0) {
+            const ratio = sideStr === "short"
+                ? (avgPx - mark) / avgPx
+                : (mark - avgPx) / avgPx;
+            pnl = notional * ratio;
+        }
+        if (pnl !== null && Number.isFinite(pnl)) {
+            const pct = notional && notional > 0 ? pnl / notional : null;
+            return { pnl, pct, isEstimated: true };
+        }
+    }
+    return { pnl: null, pct: null, isEstimated: true };
+}
+
+/**
  * 수동 개입 감지 판정 (5조건)
  * 조건 중 하나라도 해당하면 manualInterventionSuspected = true
  */
@@ -843,21 +882,40 @@ function PositionMoneyCard({
             </div>
 
             {manualInterventionSuspected ? (
-                okxActual ? (
-                    <>
-                        <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] font-bold text-amber-900">
-                            ⚠ 수동 개입 감지 / OKX 실제 기준 — 아래 값은 OKX 실제 포지션 기준이며 자동매매 성과로 확정하지 않습니다.
-                        </div>
-                        <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
-                            <MetricCell label="진입가 (OKX)" value={coerceFinite(okxActual.avgPx) ?? coerceFinite(okxActual.avg_px) ? formatPrice((coerceFinite(okxActual.avgPx) ?? coerceFinite(okxActual.avg_px))!) : "-"} />
-                            <MetricCell label="현재가 (OKX)" value={coerceFinite(okxActual.markPx) ?? coerceFinite(okxActual.mark_px) ? formatPrice((coerceFinite(okxActual.markPx) ?? coerceFinite(okxActual.mark_px))!) : markDisp} valueClass="text-amber-700" />
-                            <MetricCell label="손익 (OKX)" value={(() => { const u = coerceFinite(okxActual.upl) ?? coerceFinite(okxActual.unrealizedPnl); return u !== null ? toSignedMainKrwSubUsd(u, USDKRW_RATE).krw : "-"; })()} valueClass={(() => { const u = coerceFinite(okxActual.upl) ?? coerceFinite(okxActual.unrealizedPnl); return u === null ? "text-slate-400" : u >= 0 ? "text-emerald-600" : "text-rose-600"; })()} />
-                            <MetricCell label="수익률 (OKX)" value={(() => { const r = coerceFinite(okxActual.uplRatio) ?? coerceFinite(okxActual.unrealizedPnlPct); return r !== null ? `${(r * 100).toFixed(2)}%` : "-"; })()} valueClass={(() => { const r = coerceFinite(okxActual.uplRatio) ?? coerceFinite(okxActual.unrealizedPnlPct); return r === null ? "text-slate-400" : r >= 0 ? "text-emerald-600" : "text-rose-600"; })()} />
-                            <MetricCell label="레저 손절가 참고" value={stopDisplay} valueClass="text-rose-400" />
-                            {coerceFinite(okxActual.liqPx) !== null && <MetricCell label="청산가 (OKX)" value={formatPrice(coerceFinite(okxActual.liqPx)!)} valueClass="text-rose-600" />}
-                        </div>
-                    </>
-                ) : (
+                okxActual ? (() => {
+                    const okxAvgPx = coerceFinite(okxActual.avgPx) ?? coerceFinite(okxActual.avg_px);
+                    const okxMark = coerceFinite(okxActual.markPx) ?? coerceFinite(okxActual.mark_px) ?? mark;
+                    const okxContracts = coerceFinite(okxActual.okxContracts) ?? coerceFinite(okxActual.pos);
+                    const okxBaseQty = coerceFinite(okxActual.baseQty);
+                    const okxNotional = coerceFinite(okxActual.notionalUsd);
+                    const { pnl: estPnl, pct: estPct, isEstimated } = estimateOkxPnl(okxActual, mark);
+                    const pnlLabel = isEstimated ? "(추정) 미실현 손익" : "미실현 손익 (OKX)";
+                    const pctLabel = isEstimated ? "(추정) 수익률" : "수익률 (OKX)";
+                    const pnlClass = estPnl === null ? "text-slate-400" : estPnl >= 0 ? "text-emerald-600" : "text-rose-600";
+                    const liqPx = coerceFinite(okxActual.liqPx);
+                    return (
+                        <>
+                            <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] font-bold text-amber-900">
+                                ⚠ 수동 개입 감지 / OKX 실제 기준 — 아래 값은 OKX 실제 포지션 기준이며 자동매매 성과로 확정하지 않습니다.
+                                {isEstimated && <span className="ml-1 font-normal text-amber-700">손익은 가격 기반 추정값이며 OKX 공식 수치가 아닙니다.</span>}
+                            </div>
+                            <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
+                                <MetricCell label="진입가 (OKX)" value={okxAvgPx !== null ? formatPrice(okxAvgPx) : "-"} />
+                                <MetricCell label="현재가" value={okxMark !== null ? formatPrice(okxMark) : "-"} valueClass="text-amber-700" />
+                                <MetricCell label={pnlLabel} value={estPnl !== null ? toSignedMainKrwSubUsd(estPnl, USDKRW_RATE).krw : "-"} valueClass={pnlClass} />
+                                <MetricCell label={pctLabel} value={estPct !== null ? `${estPct >= 0 ? "+" : ""}${(estPct * 100).toFixed(2)}%` : "-"} valueClass={pnlClass} />
+                                {okxContracts !== null && <MetricCell label="계약 수 (ct)" value={`${okxContracts} ct`} />}
+                                {okxBaseQty !== null && <MetricCell label="BTC 수량" value={`${okxBaseQty.toFixed(4)} BTC`} />}
+                                {okxNotional !== null && <MetricCell label="명목금액" value={`${okxNotional.toLocaleString("en-US", { maximumFractionDigits: 2 })} USDT`} />}
+                                <MetricCell label="레저 손절가 참고" value={stopDisplay} valueClass="text-rose-400" />
+                                {liqPx !== null
+                                    ? <MetricCell label="청산가 (OKX)" value={formatPrice(liqPx)} valueClass="text-rose-600" />
+                                    : <MetricCell label="OKX 청산가" value="미제공" valueClass="text-slate-400" />}
+                            </div>
+                        </>
+                    );
+                })()
+                : (
                     <>
                         <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] font-bold text-amber-900">
                             ⚠ 수동 개입 감지 — OKX 실제 포지션 데이터 수신 불가. 아래 값은 자동 레저 참고값이며 현재 상태와 다를 수 있습니다.
@@ -1059,19 +1117,33 @@ function OpenPositionDetailCard({
             )}
 
             {manualInterventionSuspected ? (
-                okxActual ? (
-                    <>
+                okxActual ? (() => {
+                    const { pnl: estPnl, pct: estPct, isEstimated: isEst } = estimateOkxPnl(okxActual, okxMark);
+                    const pnlLabel = isEst ? "(추정) 미실현 손익" : "미실현 손익 (OKX)";
+                    const pctLabel = isEst ? "(추정) 수익률" : "손익률 (OKX)";
+                    const pnlClass = estPnl === null ? "text-slate-400" : estPnl >= 0 ? "text-emerald-600" : "text-rose-600";
+                    const okxContracts = coerceFinite(okxActual.okxContracts) ?? coerceFinite(okxActual.pos);
+                    const okxBaseQty = coerceFinite(okxActual.baseQty);
+                    const okxNotional = coerceFinite(okxActual.notionalUsd);
+                    const liqPx = coerceFinite(okxActual.liqPx);
+                    return (
+                        <>
                         <div className="px-3 pt-3 pb-2 bg-amber-50/40">
                             <p className="text-[9px] font-black uppercase tracking-widest text-amber-700 mb-1">OKX 실제 포지션 기준</p>
-                            <p className="text-[10px] text-amber-800 mb-3">자동 장부와 OKX 실제 포지션이 다릅니다. 아래 값은 OKX 실제 포지션 기준이며 자동매매 성과로 확정하지 않습니다.</p>
+                            <p className="text-[10px] text-amber-800 mb-1">자동 장부와 OKX 실제 포지션이 다릅니다. 아래 값은 OKX 실제 포지션 기준이며 자동매매 성과로 확정하지 않습니다.</p>
+                            {isEst && <p className="text-[10px] text-amber-600 mb-3">※ 미실현 손익은 가격 기반 추정값이며 OKX 공식 수치가 아닙니다 (markPx·upl·uplRatio 미제공).</p>}
                             <div className="grid grid-cols-2 gap-x-4 gap-y-3 sm:grid-cols-3">
                                 {detail("방향 (OKX)", (() => { const s = String(okxActual.side ?? okxActual.posSide ?? "—").toLowerCase(); return s === "short" ? "Short ↓" : s === "long" ? "Long ↑" : s; })(), (() => { const s = String(okxActual.side ?? okxActual.posSide ?? "").toLowerCase(); return s === "short" ? "text-rose-600" : "text-emerald-600"; })())}
                                 {detail("진입가 (avgPx)", okxAvgDisp)}
-                                {detail("현재가 (mark)", okxMarkDisp, "text-amber-700")}
-                                {detail("수량", okxQtyDisp)}
-                                {detail("미실현 손익 (OKX)", (() => { const u = coerceFinite(okxActual.upl) ?? coerceFinite(okxActual.unrealizedPnl); return u !== null ? formatSignedUsdDisplay(u) : "—"; })(), (() => { const u = coerceFinite(okxActual.upl) ?? coerceFinite(okxActual.unrealizedPnl); return u === null ? "text-slate-400" : u >= 0 ? "text-emerald-600" : "text-rose-600"; })())}
-                                {detail("손익률 (OKX)", (() => { const r = coerceFinite(okxActual.uplRatio) ?? coerceFinite(okxActual.unrealizedPnlPct); return r !== null ? `${(r * 100).toFixed(2)}%` : "—"; })())}
-                                {coerceFinite(okxActual.liqPx) !== null && detail("청산가 (liqPx)", formatPrice(coerceFinite(okxActual.liqPx)!), "text-rose-600")}
+                                {detail("현재가", okxMarkDisp, "text-amber-700")}
+                                {okxContracts !== null && detail("계약 수 (ct)", `${okxContracts} ct`)}
+                                {okxBaseQty !== null && detail("BTC 수량", `${okxBaseQty.toFixed(4)} BTC`)}
+                                {okxNotional !== null && detail("명목금액", `${okxNotional.toLocaleString("en-US", { maximumFractionDigits: 2 })} USDT`)}
+                                {detail(pnlLabel, estPnl !== null ? formatSignedUsdDisplay(estPnl) : "—", pnlClass)}
+                                {detail(pctLabel, estPct !== null ? `${estPct >= 0 ? "+" : ""}${(estPct * 100).toFixed(2)}%` : "—", pnlClass)}
+                                {liqPx !== null
+                                    ? detail("청산가 (liqPx)", formatPrice(liqPx), "text-rose-600")
+                                    : detail("OKX 청산가", "미제공", "text-slate-400")}
                                 {detail("Source", okxSource)}
                             </div>
                         </div>
@@ -1086,7 +1158,9 @@ function OpenPositionDetailCard({
                             </div>
                         </div>
                     </>
-                ) : (
+                    );
+                })()
+                : (
                     <div className="px-3 py-4">
                         <p className="text-xs font-bold text-amber-800">OKX 실제 포지션 데이터를 받을 수 없어 현재 기준 표시 불가</p>
                         <p className="mt-1 text-[11px] text-slate-500">아래는 자동 레저 참고값이며 실제 포지션과 다를 수 있습니다.</p>
