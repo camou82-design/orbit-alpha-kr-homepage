@@ -761,13 +761,131 @@ function deriveOperationalCardLabel(
     return "관망 중";
 }
 
+function OpenPositionDetailCard({
+    pos,
+    row,
+    symbolDecisions
+}: {
+    pos: Record<string, any>;
+    row: Record<string, unknown> | undefined;
+    symbolDecisions: Record<string, unknown> | null;
+}) {
+    const sym = String(pos.symbol ?? "");
+    const dec = (symbolDecisions as Record<string, { decision?: Record<string, unknown> }> | null)?.[sym]?.decision;
+    const n = normalizeOpenPos(pos);
+    const mark = n ? markForPosition(pos, row, dec ?? null) : null;
+    const uPnL = n ? unrealizedUsdResolved(n, mark) : null;
+    const marginUsd = n?.marginUsd ?? null;
+
+    const isLedgerPos = !pos._orb_exchange_only;
+    const hasMeaningfulData = n !== null && (n.entryPrice !== null || n.notionalUsd !== null);
+
+    if (!hasMeaningfulData) {
+        const isFallbackSurface = pos._orb_exchange_only === true;
+        return (
+            <div className="mt-3 rounded-lg border border-amber-100 bg-amber-50/60 px-3 py-2.5 text-xs text-amber-900">
+                {isFallbackSurface
+                    ? "원격 확인 불가 / 상태 확인 필요"
+                    : "포지션 보유 중이나 상세 데이터가 API 응답에 없습니다"}
+            </div>
+        );
+    }
+
+    const side = pos.side === "short" ? "Short ↓" : "Long ↑";
+    const sideClass = pos.side === "short" ? "text-rose-600" : "text-emerald-600";
+    const entryDisp = n?.entryPrice !== null && n?.entryPrice !== undefined ? formatPrice(n.entryPrice) : "—";
+    const markDisp = mark !== null ? formatPrice(mark) : "—";
+    const lev = n?.leverage ?? 1;
+    const notional = n?.notionalUsd;
+    const notionalDisp = notional !== null && notional !== undefined
+        ? `${notional.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USDT`
+        : "—";
+    const sizeContracts = coerceFinite(pos.sizeContracts ?? pos._orb_contracts);
+    const sizeDisp = sizeContracts !== null ? `${sizeContracts} ct / ${notionalDisp}` : notionalDisp;
+    const uClass = uPnL === null ? "text-slate-400" : uPnL >= 0 ? "text-emerald-600" : "text-rose-600";
+    const uPnlDisp = uPnL !== null ? formatSignedUsdDisplay(uPnL) : "—";
+    const uPctDisp = formatPctOnMargin(uPnL, marginUsd);
+    const stopDisp = n?.stopPx !== null && n?.stopPx !== undefined && Number.isFinite(n.stopPx!)
+        ? formatPrice(n.stopPx)
+        : "—";
+    const tp1Disp = coerceFinite(pos.targetPrice1 ?? pos.tp1Price) !== null
+        ? formatPrice(coerceFinite(pos.targetPrice1 ?? pos.tp1Price)!)
+        : "—";
+    const finalTpDisp = coerceFinite(pos.takeProfit ?? pos.finalTp) !== null
+        ? formatPrice(coerceFinite(pos.takeProfit ?? pos.finalTp)!)
+        : "—";
+    const holdDisp = formatHoldShort(n?.openedAt ?? null);
+    const entryReason = typeof pos.entryReason === "string" && pos.entryReason.trim() !== ""
+        ? pos.entryReason
+        : typeof pos.sourceSignal === "string" && pos.sourceSignal.trim() !== ""
+        ? pos.sourceSignal
+        : "—";
+
+    // 보호 주문 상태
+    const hasProtectiveSl = !!pos.protectiveSlAlgoId;
+    const hasProtectiveTp = !!pos.protectiveTpAlgoId;
+    const protectiveStatus = hasProtectiveSl || hasProtectiveTp
+        ? `SL ${hasProtectiveSl ? "✓" : "✗"} / TP ${hasProtectiveTp ? "✓" : "✗"}`
+        : typeof pos.protectiveStatus === "string" && pos.protectiveStatus.trim() !== ""
+        ? pos.protectiveStatus
+        : "—";
+
+    // Probe TP1 상태
+    const probeSubmitted = pos.tp1ProbeSubmittedAt ? formatDateTimeKstShort(coerceFinite(pos.tp1ProbeSubmittedAt)) : null;
+    const probeFilled = pos.tp1ProbeFilledAt ? formatDateTimeKstShort(coerceFinite(pos.tp1ProbeFilledAt)) : null;
+    const probeDisp = probeSubmitted ? `제출: ${probeSubmitted}${probeFilled ? ` / 체결: ${probeFilled}` : " / 미체결"}` : "—";
+
+    // 장부 정합성
+    const reconcileStatus = typeof pos.reconcileStatus === "string" ? pos.reconcileStatus
+        : typeof pos.sync_status === "string" ? pos.sync_status
+        : "—";
+
+    // OKX 동기화
+    const okxSyncDisp = typeof pos.okxSyncStatus === "string" ? pos.okxSyncStatus
+        : isLedgerPos ? "원장 기준" : "OKX 기준";
+
+    const detail = (label: string, value: string, valClass?: string) => (
+        <div className="min-w-0">
+            <p className="text-[9px] font-bold uppercase tracking-wider text-slate-400">{label}</p>
+            <p className={`mt-0.5 font-mono text-xs font-semibold truncate ${valClass ?? "text-slate-700"}`}>{value}</p>
+        </div>
+    );
+
+    return (
+        <div className="mt-3 overflow-hidden rounded-lg border border-emerald-100 bg-emerald-50/30">
+            <div className="border-b border-emerald-100 bg-emerald-50/60 px-3 py-2">
+                <p className="text-[10px] font-black uppercase tracking-widest text-emerald-700">보유 포지션 상세</p>
+            </div>
+            <div className="grid grid-cols-2 gap-x-4 gap-y-3 p-3 sm:grid-cols-3">
+                {detail("방향", side, sideClass)}
+                {detail("진입가", entryDisp)}
+                {detail("현재가", markDisp, "text-amber-700")}
+                {detail("수량 / 명목금액", sizeDisp)}
+                {detail("레버리지", `${lev}x`)}
+                {detail("미실현 손익", uPnlDisp, uClass)}
+                {detail("미실현 손익 %", uPctDisp, uClass)}
+                {detail("손절가", stopDisp, "text-rose-500")}
+                {detail("TP1", tp1Disp, "text-emerald-600")}
+                {detail("Final TP", finalTpDisp, "text-emerald-700")}
+                {detail("보유 시간", holdDisp)}
+                {detail("진입 사유", entryReason)}
+                {detail("보호 주문 상태", protectiveStatus)}
+                {detail("Probe TP1", probeDisp)}
+                {detail("장부 정합성", reconcileStatus)}
+                {detail("OKX 동기화", okxSyncDisp)}
+            </div>
+        </div>
+    );
+}
+
 function SymbolStatusCard({
     bundle,
     row,
     symbolDecisions,
     showInternalTags,
     hasPosition,
-    clientNowMs
+    clientNowMs,
+    positionSlots
 }: {
     bundle: Bundle;
     row: Record<string, unknown>;
@@ -775,6 +893,7 @@ function SymbolStatusCard({
     showInternalTags: boolean;
     hasPosition: boolean;
     clientNowMs: number;
+    positionSlots: PositionDisplaySlot[];
 }) {
     const sym = String(row.symbol);
     const symbolData = (symbolDecisions as Record<string, any> | null)?.[sym];
@@ -823,11 +942,25 @@ function SymbolStatusCard({
         </div>
     );
 
+    const activeSlot = positionSlots.find((s) => String(s.pos.symbol) === sym);
+    const activeRow = bundle.symbolRows?.find((r) => r.symbol === sym);
+
     let body: ReactNode;
     if (hasPosition) {
         body = (
             <div className="mt-3 space-y-2">
                 <p className="text-xs text-slate-600">{rep.reason}</p>
+                {activeSlot ? (
+                    <OpenPositionDetailCard
+                        pos={activeSlot.pos}
+                        row={activeRow as Record<string, unknown> | undefined}
+                        symbolDecisions={symbolDecisions}
+                    />
+                ) : (
+                    <div className="mt-3 rounded-lg border border-amber-100 bg-amber-50/60 px-3 py-2.5 text-xs text-amber-900">
+                        포지션 보유 중
+                    </div>
+                )}
                 {!auditMissing && (
                     <p className="text-[10px] text-slate-400">
                         (참고) 마지막 무진입 스냅샷:{" "}
@@ -1573,6 +1706,7 @@ export default function FuturesPaperClientPage({ initialBundle }: { initialBundl
                                             showInternalTags={showInternalTags}
                                             hasPosition={hasPos}
                                             clientNowMs={clientNowMs}
+                                            positionSlots={positionSlots}
                                         />
                                     );
                                 })}
