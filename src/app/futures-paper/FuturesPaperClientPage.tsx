@@ -253,6 +253,10 @@ type PositionDisplaySlot = Readonly<{
     pos: Record<string, unknown>;
     exchangeDiagnosticBadge: string | null;
     exchangeStatusHeadline: string | null;
+    manualInterventionSuspected: boolean;
+    manualInterventionReasons: string[];
+    /** OKX 실제 포지션 (okx_positions_preview 행) */
+    okxActual: Record<string, unknown> | null;
 }>;
 
 function positionRowKey(symbol: string, side: string): string {
@@ -314,6 +318,76 @@ function getActivePositions(bundle: Bundle): { positions: Array<Record<string, a
 }
 
 /**
+ * 수동 개입 감지 판정 (5조건)
+ * 조건 중 하나라도 해당하면 manualInterventionSuspected = true
+ */
+function detectManualIntervention(
+    ledgerPos: Record<string, unknown>,
+    sync: Record<string, unknown> | null | undefined,
+    isFallbackSlot: boolean
+): { suspected: boolean; reasons: string[] } {
+    const reasons: string[] = [];
+
+    const syncStatus = typeof sync?.sync_status === "string" ? sync.sync_status : "";
+    const preview = Array.isArray(sync?.okx_positions_preview)
+        ? (sync!.okx_positions_preview as Record<string, unknown>[])
+        : [];
+
+    const sym = String(ledgerPos.symbol ?? "");
+    const ledgerSide = String(ledgerPos.side ?? "long").toLowerCase();
+    const okxRow = preview.find(
+        (o) => String(o.symbol) === sym && String(o.side ?? "").toLowerCase() === ledgerSide
+    );
+
+    // 조건 1: ledger 있는데 OKX qty/side/avgPx 다름
+    if (["SIZE_MISMATCH", "NOTIONAL_MISMATCH", "KEY_MISMATCH"].includes(syncStatus)) {
+        reasons.push(`OKX 수량·방향 불일치 (${syncStatus})`);
+    }
+    if (okxRow) {
+        const ledgerSz = coerceFinite(ledgerPos.sizeUsd) ?? coerceFinite(ledgerPos.sizeContracts);
+        const okxSz = coerceFinite(okxRow.pos) ?? coerceFinite(okxRow.notional);
+        if (ledgerSz !== null && okxSz !== null && Math.abs(ledgerSz - okxSz) / Math.max(Math.abs(ledgerSz), 1) > 0.05) {
+            reasons.push(`레저/OKX 수량 편차 ${((Math.abs(ledgerSz - okxSz) / Math.abs(ledgerSz)) * 100).toFixed(1)}%`);
+        }
+    }
+
+    // 조건 2: OKX_ONLY — 원장에 없는 포지션이 OKX에 존재
+    if (syncStatus === "OKX_ONLY") {
+        reasons.push("OKX에만 포지션 존재 (엔진 원장 누락)");
+    }
+
+    // 조건 3: currentPositions 대신 okx preview / position_ops_surface 폴백 사용
+    if (isFallbackSlot) {
+        reasons.push("OKX preview/ops_surface 폴백 소스 사용 중 (원장 미연동)");
+    }
+    if (ledgerPos._orb_exchange_only === true) {
+        reasons.push("원장에 없는 OKX 전용 포지션");
+    }
+
+    // 조건 4: entryReason이 자동인데 OKX avgPx가 ledger entryPrice와 5% 초과 차이
+    const autoReasons = ["paper_long_candidate", "paper_short_candidate", "v2_", "CORE_", "SURGE_", "PROBE_"];
+    const entryReason = String(ledgerPos.entryReason ?? ledgerPos.sourceSignal ?? "");
+    const isAutoEntry = entryReason === "" || autoReasons.some((r) => entryReason.includes(r));
+    if (isAutoEntry && okxRow) {
+        const ledgerPx = coerceFinite(ledgerPos.entryPrice);
+        const okxAvg = coerceFinite(okxRow.avgPx ?? okxRow.avg_px ?? okxRow.reference_entry_px);
+        if (ledgerPx !== null && okxAvg !== null && ledgerPx > 0) {
+            const diff = Math.abs(ledgerPx - okxAvg) / ledgerPx;
+            if (diff > 0.05) {
+                reasons.push(`자동 진입가(${ledgerPx.toFixed(1)}) vs OKX avgPx(${okxAvg.toFixed(1)}) ${(diff * 100).toFixed(1)}% 차이`);
+            }
+        }
+    }
+
+    // 조건 5: LEDGER_ONLY — 원장에만 있고 OKX에 없음
+    if (syncStatus === "LEDGER_ONLY") {
+        reasons.push("원장에만 포지션 존재 (OKX 실제 미보유 가능성)");
+    }
+
+    return { suspected: reasons.length > 0, reasons };
+}
+
+/**
  * 전용 뷰 데이터를 구성하는 함수
  * 1) getActivePositions (currentPositions 우선, openPositions fallback/필터)
  * 2) 원장 비었을 때 OKX 전용 포지션 보강 (okx_positions_preview / ops_surface)
@@ -342,22 +416,32 @@ function buildPositionDisplaySlots(bundle: Bundle): PositionDisplaySlot[] {
     const slots: PositionDisplaySlot[] = [];
     const seenKeys = new Set<string>();
 
+    // OKX preview 참조 (detectManualIntervention에서도 사용)
+    const preview = Array.isArray(sync?.okx_positions_preview)
+        ? (sync!.okx_positions_preview as Record<string, unknown>[])
+        : [];
+
     for (const p of activePositions) {
         const sym = String(p.symbol || "");
         const side = String(p.side || "long").toLowerCase();
         seenKeys.add(positionRowKey(sym, side));
-        
+
+        const { suspected, reasons } = detectManualIntervention(p, sync as Record<string, unknown> | null, false);
+        const okxActual = preview.find(
+            (o) => String(o.symbol) === sym && String(o.side ?? "").toLowerCase() === side
+        ) ?? null;
+
         slots.push({
             pos: p,
-            exchangeDiagnosticBadge: reconcileBadge,
-            exchangeStatusHeadline: null
+            exchangeDiagnosticBadge: suspected ? `수동 개입 감지 · ${reasons[0] ?? syncStatus}` : reconcileBadge,
+            exchangeStatusHeadline: null,
+            manualInterventionSuspected: suspected,
+            manualInterventionReasons: reasons,
+            okxActual
         });
     }
 
-    // 원장에 없는 OKX ONLY 포지션 보강
-    const preview = Array.isArray(sync?.okx_positions_preview)
-        ? (sync.okx_positions_preview as Record<string, unknown>[])
-        : [];
+    // 원장에 없는 OKX ONLY 포지션 보강 (preview는 위에서 이미 선언됨)
     const opsRows = Array.isArray(ops?.rows) ? (ops.rows as Record<string, unknown>[]) : [];
 
     const findOpsRow = (symbol: string, side: string) =>
@@ -379,19 +463,28 @@ function buildPositionDisplaySlots(bundle: Bundle): PositionDisplaySlot[] {
         const stopPx = coerceFinite(op?.ledger_stop_px) ?? coerceFinite(op?.initial_stop_px_engine_mirror) ?? null;
         const contracts = coerceFinite(row.pos);
 
+        const fallbackPos = {
+            symbol,
+            side,
+            ...(entryPx !== null ? { entryPrice: entryPx } : {}),
+            ...(stopPx !== null ? { stopPrice: stopPx } : {}),
+            leverage: 10,
+            status: "open",
+            _orb_exchange_only: true,
+            ...(contracts !== null ? { _orb_contracts: contracts } : {})
+        };
+        const { suspected: fbSuspected, reasons: fbReasons } = detectManualIntervention(
+            fallbackPos, sync as Record<string, unknown> | null, true
+        );
         slots.push({
-            pos: {
-                symbol,
-                side,
-                ...(entryPx !== null ? { entryPrice: entryPx } : {}),
-                ...(stopPx !== null ? { stopPrice: stopPx } : {}),
-                leverage: 10,
-                status: "open",
-                _orb_exchange_only: true,
-                ...(contracts !== null ? { _orb_contracts: contracts } : {})
-            },
-            exchangeDiagnosticBadge: syncStatus === "OKX_ONLY" ? "Paper 원장 미동기화 · OKX_ONLY" : `실거래소 포지션 · ${syncStatus || "ALIGNED"}`,
-            exchangeStatusHeadline: "실거래소 포지션 보유 중"
+            pos: fallbackPos,
+            exchangeDiagnosticBadge: fbSuspected
+                ? `수동 개입 감지 · ${fbReasons[0] ?? syncStatus}`
+                : syncStatus === "OKX_ONLY" ? "Paper 원장 미동기화 · OKX_ONLY" : `실거래소 포지션 · ${syncStatus || "ALIGNED"}`,
+            exchangeStatusHeadline: fbSuspected ? "수동 개입 감지 / 장부 정합성 확인 필요" : "실거래소 포지션 보유 중",
+            manualInterventionSuspected: fbSuspected,
+            manualInterventionReasons: fbReasons,
+            okxActual: row as Record<string, unknown>
         });
     }
 
@@ -764,11 +857,17 @@ function deriveOperationalCardLabel(
 function OpenPositionDetailCard({
     pos,
     row,
-    symbolDecisions
+    symbolDecisions,
+    manualInterventionSuspected,
+    manualInterventionReasons,
+    okxActual
 }: {
     pos: Record<string, any>;
     row: Record<string, unknown> | undefined;
     symbolDecisions: Record<string, unknown> | null;
+    manualInterventionSuspected: boolean;
+    manualInterventionReasons: string[];
+    okxActual: Record<string, unknown> | null;
 }) {
     const sym = String(pos.symbol ?? "");
     const dec = (symbolDecisions as Record<string, { decision?: Record<string, unknown> }> | null)?.[sym]?.decision;
@@ -821,7 +920,6 @@ function OpenPositionDetailCard({
         ? pos.sourceSignal
         : "—";
 
-    // 보호 주문 상태
     const hasProtectiveSl = !!pos.protectiveSlAlgoId;
     const hasProtectiveTp = !!pos.protectiveTpAlgoId;
     const protectiveStatus = hasProtectiveSl || hasProtectiveTp
@@ -830,17 +928,14 @@ function OpenPositionDetailCard({
         ? pos.protectiveStatus
         : "—";
 
-    // Probe TP1 상태
     const probeSubmitted = pos.tp1ProbeSubmittedAt ? formatDateTimeKstShort(coerceFinite(pos.tp1ProbeSubmittedAt)) : null;
     const probeFilled = pos.tp1ProbeFilledAt ? formatDateTimeKstShort(coerceFinite(pos.tp1ProbeFilledAt)) : null;
     const probeDisp = probeSubmitted ? `제출: ${probeSubmitted}${probeFilled ? ` / 체결: ${probeFilled}` : " / 미체결"}` : "—";
 
-    // 장부 정합성
     const reconcileStatus = typeof pos.reconcileStatus === "string" ? pos.reconcileStatus
         : typeof pos.sync_status === "string" ? pos.sync_status
         : "—";
 
-    // OKX 동기화
     const okxSyncDisp = typeof pos.okxSyncStatus === "string" ? pos.okxSyncStatus
         : isLedgerPos ? "원장 기준" : "OKX 기준";
 
@@ -851,28 +946,93 @@ function OpenPositionDetailCard({
         </div>
     );
 
+    // OKX 실제 포지션 필드 추출
+    const okxSide = okxActual ? String(okxActual.side ?? okxActual.posSide ?? "—") : "—";
+    const okxQty = okxActual ? (coerceFinite(okxActual.pos) ?? coerceFinite(okxActual.notional) ?? null) : null;
+    const okxQtyDisp = okxQty !== null ? String(okxQty) : "—";
+    const okxAvgPx = okxActual ? (coerceFinite(okxActual.avgPx) ?? coerceFinite(okxActual.avg_px) ?? null) : null;
+    const okxAvgDisp = okxAvgPx !== null ? formatPrice(okxAvgPx) : "—";
+    const okxMark = okxActual ? (coerceFinite(okxActual.markPx) ?? coerceFinite(okxActual.mark_px) ?? mark) : mark;
+    const okxMarkDisp = okxMark !== null ? formatPrice(okxMark) : markDisp;
+    const okxSource = okxActual ? String(okxActual.source ?? okxActual.mgnMode ?? "OKX") : "—";
+
+    const borderClass = manualInterventionSuspected
+        ? "border-amber-200 bg-amber-50/20"
+        : "border-emerald-100 bg-emerald-50/30";
+    const headerClass = manualInterventionSuspected
+        ? "border-b border-amber-200 bg-amber-50/60 px-3 py-2"
+        : "border-b border-emerald-100 bg-emerald-50/60 px-3 py-2";
+    const headerTextClass = manualInterventionSuspected
+        ? "text-[10px] font-black uppercase tracking-widest text-amber-700"
+        : "text-[10px] font-black uppercase tracking-widest text-emerald-700";
+
     return (
-        <div className="mt-3 overflow-hidden rounded-lg border border-emerald-100 bg-emerald-50/30">
-            <div className="border-b border-emerald-100 bg-emerald-50/60 px-3 py-2">
-                <p className="text-[10px] font-black uppercase tracking-widest text-emerald-700">보유 포지션 상세</p>
+        <div className={`mt-3 overflow-hidden rounded-lg border ${borderClass}`}>
+            <div className={headerClass}>
+                <p className={headerTextClass}>
+                    {manualInterventionSuspected ? "⚠️ 수동 개입 감지 / 보유 포지션 상세" : "보유 포지션 상세"}
+                </p>
             </div>
-            <div className="grid grid-cols-2 gap-x-4 gap-y-3 p-3 sm:grid-cols-3">
-                {detail("방향", side, sideClass)}
-                {detail("진입가", entryDisp)}
-                {detail("현재가", markDisp, "text-amber-700")}
-                {detail("수량 / 명목금액", sizeDisp)}
-                {detail("레버리지", `${lev}x`)}
-                {detail("미실현 손익", uPnlDisp, uClass)}
-                {detail("미실현 손익 %", uPctDisp, uClass)}
-                {detail("손절가", stopDisp, "text-rose-500")}
-                {detail("TP1", tp1Disp, "text-emerald-600")}
-                {detail("Final TP", finalTpDisp, "text-emerald-700")}
-                {detail("보유 시간", holdDisp)}
-                {detail("진입 사유", entryReason)}
-                {detail("보호 주문 상태", protectiveStatus)}
-                {detail("Probe TP1", probeDisp)}
-                {detail("장부 정합성", reconcileStatus)}
-                {detail("OKX 동기화", okxSyncDisp)}
+
+            {manualInterventionSuspected && (
+                <div className="border-b border-amber-200 bg-amber-50 px-3 py-3 space-y-2">
+                    <p className="text-xs font-bold text-amber-900">
+                        ⚠ 수동 거래 또는 외부 체결 이후 자동 장부와 OKX 실제 포지션이 다를 수 있습니다. 이 손익은 자동매매 성과로 확정하지 않습니다.
+                    </p>
+                    <ul className="space-y-0.5">
+                        {manualInterventionReasons.map((r, i) => (
+                            <li key={i} className="text-[11px] font-medium text-amber-800">· {r}</li>
+                        ))}
+                    </ul>
+                    <p className="text-[10px] font-semibold text-amber-700 border-t border-amber-200 pt-2">
+                        ⛔ 정합성 확인 전 {String(pos.symbol ?? "")} 신규 자동 진입 차단 필요 | 강제 청산 또는 history 확정 기록 생성 금지
+                    </p>
+                </div>
+            )}
+
+            {/* 자동 레저 기준 */}
+            <div className="px-3 pt-3 pb-1">
+                <p className="text-[9px] font-bold uppercase tracking-widest text-slate-400 mb-2">자동 레저 기준</p>
+                <div className="grid grid-cols-2 gap-x-4 gap-y-3 sm:grid-cols-3">
+                    {detail("방향", side, sideClass)}
+                    {detail("진입가", entryDisp)}
+                    {detail("현재가", markDisp, "text-amber-700")}
+                    {detail("수량 / 명목금액", sizeDisp)}
+                    {detail("레버리지", `${lev}x`)}
+                    {detail("진입 사유", entryReason)}
+                    {!manualInterventionSuspected && detail("미실현 손익", uPnlDisp, uClass)}
+                    {!manualInterventionSuspected && detail("미실현 손익 %", uPctDisp, uClass)}
+                    {detail("손절가", stopDisp, "text-rose-500")}
+                    {detail("TP1", tp1Disp, "text-emerald-600")}
+                    {detail("Final TP", finalTpDisp, "text-emerald-700")}
+                    {detail("보유 시간", holdDisp)}
+                </div>
+            </div>
+
+            {/* OKX 실제 기준 (수동 개입 시 표시) */}
+            {manualInterventionSuspected && okxActual && (
+                <div className="border-t border-amber-100 px-3 pt-3 pb-1 bg-amber-50/30">
+                    <p className="text-[9px] font-bold uppercase tracking-widest text-amber-600 mb-2">OKX 실제 기준</p>
+                    <div className="grid grid-cols-2 gap-x-4 gap-y-3 sm:grid-cols-3">
+                        {detail("Actual Side", okxSide)}
+                        {detail("Actual Qty", okxQtyDisp)}
+                        {detail("Actual avgPx", okxAvgDisp)}
+                        {detail("Mark Price", okxMarkDisp, "text-amber-700")}
+                        {detail("Source", okxSource)}
+                    </div>
+                </div>
+            )}
+
+            {/* 정합성 상태 및 반화드/프로브 */}
+            <div className="border-t border-slate-100 px-3 pt-3 pb-3">
+                <p className="text-[9px] font-bold uppercase tracking-widest text-slate-400 mb-2">정합성 및 보호
+                </p>
+                <div className="grid grid-cols-2 gap-x-4 gap-y-3 sm:grid-cols-3">
+                    {detail("보호 주문 상태", protectiveStatus)}
+                    {detail("Probe TP1", probeDisp)}
+                    {detail("장부 정합성", reconcileStatus)}
+                    {detail("OKX 동기화", okxSyncDisp)}
+                </div>
             </div>
         </div>
     );
@@ -906,13 +1066,18 @@ function SymbolStatusCard({
     const auditMissing = auditRow === null;
     const stale = judgeTs === null ? true : isStaleNoEntryAudit(judgeTs, clientNowMs);
     const ageMs = judgeTs !== null ? Math.max(0, clientNowMs - judgeTs) : null;
+    const activeSlot = positionSlots.find((s) => String(s.pos.symbol) === sym);
+    const activeRow = bundle.symbolRows?.find((r) => r.symbol === sym);
+    const isManualIntervention = activeSlot?.manualInterventionSuspected === true;
+    const effectiveStateLabel = isManualIntervention ? "수동 개입 감지" : stateLabel;
 
-    const badgeClass =
-        stateLabel === "포지션 보유 중"
+    const badgeClass = isManualIntervention
+        ? "bg-amber-50 text-amber-700 border-amber-200"
+        : effectiveStateLabel === "포지션 보유 중"
             ? "bg-emerald-50 text-emerald-600 border-emerald-100"
-            : stateLabel === "진입 대기"
+            : effectiveStateLabel === "진입 대기"
               ? "bg-indigo-50 text-indigo-600 border-indigo-100"
-              : stateLabel === "차단 중"
+              : effectiveStateLabel === "차단 중"
                 ? "bg-rose-50 text-rose-600 border-rose-100"
                 : "bg-slate-50 text-slate-500 border-slate-100";
 
@@ -942,19 +1107,23 @@ function SymbolStatusCard({
         </div>
     );
 
-    const activeSlot = positionSlots.find((s) => String(s.pos.symbol) === sym);
-    const activeRow = bundle.symbolRows?.find((r) => r.symbol === sym);
-
     let body: ReactNode;
     if (hasPosition) {
         body = (
             <div className="mt-3 space-y-2">
-                <p className="text-xs text-slate-600">{rep.reason}</p>
+                <p className="text-xs text-slate-600">
+                    {isManualIntervention
+                        ? "수동 개입 감지 / 장부 정합성 확인 필요"
+                        : rep.reason}
+                </p>
                 {activeSlot ? (
                     <OpenPositionDetailCard
                         pos={activeSlot.pos}
                         row={activeRow as Record<string, unknown> | undefined}
                         symbolDecisions={symbolDecisions}
+                        manualInterventionSuspected={activeSlot.manualInterventionSuspected}
+                        manualInterventionReasons={activeSlot.manualInterventionReasons}
+                        okxActual={activeSlot.okxActual}
                     />
                 ) : (
                     <div className="mt-3 rounded-lg border border-amber-100 bg-amber-50/60 px-3 py-2.5 text-xs text-amber-900">
