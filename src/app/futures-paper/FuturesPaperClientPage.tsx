@@ -690,7 +690,9 @@ function PositionMoneyCard({
     symbolDecisions,
     showInternalTags,
     exchangeDiagnosticBadge,
-    exchangeStatusHeadline
+    exchangeStatusHeadline,
+    manualInterventionSuspected = false,
+    okxActual = null
 }: {
     pos: Record<string, any>;
     row: Record<string, unknown> | undefined;
@@ -698,6 +700,8 @@ function PositionMoneyCard({
     showInternalTags: boolean;
     exchangeDiagnosticBadge?: string | null;
     exchangeStatusHeadline?: string | null;
+    manualInterventionSuspected?: boolean;
+    okxActual?: Record<string, unknown> | null;
 }) {
     const n = normalizeOpenPos(pos);
     const sym = String(pos.symbol ?? "");
@@ -803,14 +807,43 @@ function PositionMoneyCard({
                 </div>
             </div>
 
-            <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
-                <MetricCell label="진입가" value={entryDisp} />
-                <MetricCell label="현재가" value={markDisp} valueClass="text-amber-700" />
-                <MetricCell label="손익" value={uPnL !== null ? toSignedMainKrwSubUsd(uPnL, USDKRW_RATE).krw : "-"} valueClass={uClass} />
-                <MetricCell label="수익률" value={uPct} valueClass={uClass} />
-                <MetricCell label={exitTargetLabel} value={exitTargetValue} valueClass="text-emerald-600" />
-                <MetricCell label="손절가" value={stopDisplay} valueClass="text-rose-500" />
-            </div>
+            {manualInterventionSuspected ? (
+                okxActual ? (
+                    <>
+                        <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] font-bold text-amber-900">
+                            ⚠ 수동 개입 감지 / OKX 실제 기준 — 아래 값은 OKX 실제 포지션 기준이며 자동매매 성과로 확정하지 않습니다.
+                        </div>
+                        <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
+                            <MetricCell label="진입가 (OKX)" value={coerceFinite(okxActual.avgPx) ?? coerceFinite(okxActual.avg_px) ? formatPrice((coerceFinite(okxActual.avgPx) ?? coerceFinite(okxActual.avg_px))!) : "-"} />
+                            <MetricCell label="현재가 (OKX)" value={coerceFinite(okxActual.markPx) ?? coerceFinite(okxActual.mark_px) ? formatPrice((coerceFinite(okxActual.markPx) ?? coerceFinite(okxActual.mark_px))!) : markDisp} valueClass="text-amber-700" />
+                            <MetricCell label="손익 (OKX)" value={(() => { const u = coerceFinite(okxActual.upl) ?? coerceFinite(okxActual.unrealizedPnl); return u !== null ? toSignedMainKrwSubUsd(u, USDKRW_RATE).krw : "-"; })()} valueClass={(() => { const u = coerceFinite(okxActual.upl) ?? coerceFinite(okxActual.unrealizedPnl); return u === null ? "text-slate-400" : u >= 0 ? "text-emerald-600" : "text-rose-600"; })()} />
+                            <MetricCell label="수익률 (OKX)" value={(() => { const r = coerceFinite(okxActual.uplRatio) ?? coerceFinite(okxActual.unrealizedPnlPct); return r !== null ? `${(r * 100).toFixed(2)}%` : "-"; })()} valueClass={(() => { const r = coerceFinite(okxActual.uplRatio) ?? coerceFinite(okxActual.unrealizedPnlPct); return r === null ? "text-slate-400" : r >= 0 ? "text-emerald-600" : "text-rose-600"; })()} />
+                            <MetricCell label="레저 손절가 참고" value={stopDisplay} valueClass="text-rose-400" />
+                            {coerceFinite(okxActual.liqPx) !== null && <MetricCell label="청산가 (OKX)" value={formatPrice(coerceFinite(okxActual.liqPx)!)} valueClass="text-rose-600" />}
+                        </div>
+                    </>
+                ) : (
+                    <>
+                        <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] font-bold text-amber-900">
+                            ⚠ 수동 개입 감지 — OKX 실제 포지션 데이터 수신 불가. 아래 값은 자동 레저 참고값이며 현재 상태와 다를 수 있습니다.
+                        </div>
+                        <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6 opacity-50">
+                            <MetricCell label="레저 진입가" value={entryDisp} />
+                            <MetricCell label="현재가" value={markDisp} valueClass="text-amber-700" />
+                            <MetricCell label="레저 손절가" value={stopDisplay} valueClass="text-rose-500" />
+                        </div>
+                    </>
+                )
+            ) : (
+                <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
+                    <MetricCell label="진입가" value={entryDisp} />
+                    <MetricCell label="현재가" value={markDisp} valueClass="text-amber-700" />
+                    <MetricCell label="손익" value={uPnL !== null ? toSignedMainKrwSubUsd(uPnL, USDKRW_RATE).krw : "-"} valueClass={uClass} />
+                    <MetricCell label="수익률" value={uPct} valueClass={uClass} />
+                    <MetricCell label={exitTargetLabel} value={exitTargetValue} valueClass="text-emerald-600" />
+                    <MetricCell label="손절가" value={stopDisplay} valueClass="text-rose-500" />
+                </div>
+            )}
 
             {showInternalTags && (
                 <div className="mt-4 space-y-4 border-t border-slate-100 pt-4">
@@ -1879,6 +1912,8 @@ export default function FuturesPaperClientPage({ initialBundle }: { initialBundl
                                             showInternalTags={showInternalTags}
                                             exchangeDiagnosticBadge={slot.exchangeDiagnosticBadge}
                                             exchangeStatusHeadline={slot.exchangeStatusHeadline}
+                                            manualInterventionSuspected={slot.manualInterventionSuspected}
+                                            okxActual={slot.okxActual}
                                         />
                                     ))
                                 )}
