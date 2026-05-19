@@ -990,38 +990,66 @@ function OpenPositionDetailCard({
                 </div>
             )}
 
-            {/* 자동 레저 기준 */}
-            <div className="px-3 pt-3 pb-1">
-                <p className="text-[9px] font-bold uppercase tracking-widest text-slate-400 mb-2">자동 레저 기준</p>
-                <div className="grid grid-cols-2 gap-x-4 gap-y-3 sm:grid-cols-3">
-                    {detail("방향", side, sideClass)}
-                    {detail("진입가", entryDisp)}
-                    {detail("현재가", markDisp, "text-amber-700")}
-                    {detail("수량 / 명목금액", sizeDisp)}
-                    {detail("레버리지", `${lev}x`)}
-                    {detail("진입 사유", entryReason)}
-                    {!manualInterventionSuspected && detail("미실현 손익", uPnlDisp, uClass)}
-                    {!manualInterventionSuspected && detail("미실현 손익 %", uPctDisp, uClass)}
-                    {detail("손절가", stopDisp, "text-rose-500")}
-                    {detail("TP1", tp1Disp, "text-emerald-600")}
-                    {detail("Final TP", finalTpDisp, "text-emerald-700")}
-                    {detail("보유 시간", holdDisp)}
-                </div>
-            </div>
-
-            {/* OKX 실제 기준 (수동 개입 시 표시) */}
-            {manualInterventionSuspected && okxActual && (
-                <div className="border-t border-amber-100 px-3 pt-3 pb-1 bg-amber-50/30">
-                    <p className="text-[9px] font-bold uppercase tracking-widest text-amber-600 mb-2">OKX 실제 기준</p>
+            {manualInterventionSuspected ? (
+                okxActual ? (
+                    <>
+                        <div className="px-3 pt-3 pb-2 bg-amber-50/40">
+                            <p className="text-[9px] font-black uppercase tracking-widest text-amber-700 mb-1">OKX 실제 포지션 기준</p>
+                            <p className="text-[10px] text-amber-800 mb-3">자동 장부와 OKX 실제 포지션이 다릅니다. 아래 값은 OKX 실제 포지션 기준이며 자동매매 성과로 확정하지 않습니다.</p>
+                            <div className="grid grid-cols-2 gap-x-4 gap-y-3 sm:grid-cols-3">
+                                {detail("방향 (OKX)", (() => { const s = String(okxActual.side ?? okxActual.posSide ?? "—").toLowerCase(); return s === "short" ? "Short ↓" : s === "long" ? "Long ↑" : s; })(), (() => { const s = String(okxActual.side ?? okxActual.posSide ?? "").toLowerCase(); return s === "short" ? "text-rose-600" : "text-emerald-600"; })())}
+                                {detail("진입가 (avgPx)", okxAvgDisp)}
+                                {detail("현재가 (mark)", okxMarkDisp, "text-amber-700")}
+                                {detail("수량", okxQtyDisp)}
+                                {detail("미실현 손익 (OKX)", (() => { const u = coerceFinite(okxActual.upl) ?? coerceFinite(okxActual.unrealizedPnl); return u !== null ? formatSignedUsdDisplay(u) : "—"; })(), (() => { const u = coerceFinite(okxActual.upl) ?? coerceFinite(okxActual.unrealizedPnl); return u === null ? "text-slate-400" : u >= 0 ? "text-emerald-600" : "text-rose-600"; })())}
+                                {detail("손익률 (OKX)", (() => { const r = coerceFinite(okxActual.uplRatio) ?? coerceFinite(okxActual.unrealizedPnlPct); return r !== null ? `${(r * 100).toFixed(2)}%` : "—"; })())}
+                                {coerceFinite(okxActual.liqPx) !== null && detail("청산가 (liqPx)", formatPrice(coerceFinite(okxActual.liqPx)!), "text-rose-600")}
+                                {detail("Source", okxSource)}
+                            </div>
+                        </div>
+                        <div className="border-t border-amber-100 px-3 pt-3 pb-2 bg-slate-50/60">
+                            <p className="text-[9px] font-bold uppercase tracking-widest text-slate-400 mb-2">자동 레저 기준 참고값</p>
+                            <div className="grid grid-cols-2 gap-x-4 gap-y-3 sm:grid-cols-3">
+                                {detail("레저 방향", side, sideClass)}
+                                {detail("레저 진입가", entryDisp)}
+                                {detail("레저 손절가", stopDisp, "text-rose-500")}
+                                {detail("진입 사유", entryReason)}
+                                {detail("보유 시간", holdDisp)}
+                            </div>
+                        </div>
+                    </>
+                ) : (
+                    <div className="px-3 py-4">
+                        <p className="text-xs font-bold text-amber-800">OKX 실제 포지션 데이터를 받을 수 없어 현재 기준 표시 불가</p>
+                        <p className="mt-1 text-[11px] text-slate-500">아래는 자동 레저 참고값이며 실제 포지션과 다를 수 있습니다.</p>
+                        <div className="mt-3 grid grid-cols-2 gap-x-4 gap-y-3 sm:grid-cols-3">
+                            {detail("레저 방향", side, sideClass)}
+                            {detail("레저 진입가", entryDisp)}
+                            {detail("레저 손절가", stopDisp, "text-rose-500")}
+                            {detail("진입 사유", entryReason)}
+                            {detail("보유 시간", holdDisp)}
+                        </div>
+                    </div>
+                )
+            ) : (
+                <div className="px-3 pt-3 pb-1">
                     <div className="grid grid-cols-2 gap-x-4 gap-y-3 sm:grid-cols-3">
-                        {detail("Actual Side", okxSide)}
-                        {detail("Actual Qty", okxQtyDisp)}
-                        {detail("Actual avgPx", okxAvgDisp)}
-                        {detail("Mark Price", okxMarkDisp, "text-amber-700")}
-                        {detail("Source", okxSource)}
+                        {detail("방향", side, sideClass)}
+                        {detail("진입가", entryDisp)}
+                        {detail("현재가", markDisp, "text-amber-700")}
+                        {detail("수량 / 명목금액", sizeDisp)}
+                        {detail("레버리지", `${lev}x`)}
+                        {detail("미실현 손익", uPnlDisp, uClass)}
+                        {detail("미실현 손익 %", uPctDisp, uClass)}
+                        {detail("손절가", stopDisp, "text-rose-500")}
+                        {detail("TP1", tp1Disp, "text-emerald-600")}
+                        {detail("Final TP", finalTpDisp, "text-emerald-700")}
+                        {detail("보유 시간", holdDisp)}
+                        {detail("진입 사유", entryReason)}
                     </div>
                 </div>
             )}
+
 
             {/* 정합성 상태 및 반화드/프로브 */}
             <div className="border-t border-slate-100 px-3 pt-3 pb-3">
