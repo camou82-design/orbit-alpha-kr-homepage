@@ -335,11 +335,18 @@ function detectManualIntervention(
 
     const sym = String(ledgerPos.symbol ?? "");
     const ledgerSide = String(ledgerPos.side ?? "long").toLowerCase();
-    const okxRow = preview.find(
-        (o) => String(o.symbol) === sym && String(o.side ?? "").toLowerCase() === ledgerSide
-    );
 
-    // 조건 1: ledger 있는데 OKX qty/side/avgPx 다름
+    // 심볼·방향 매칭: OKX는 "BTC-USDT-SWAP" 또는 "BTCUSDT", posSide/net 처리
+    const symCore = sym.replace(/-USDT-SWAP$/i, "").replace(/USDT$/i, "").toUpperCase();
+    const okxRow = preview.find((o) => {
+        const oSym = String(o.symbol ?? "").replace(/-USDT-SWAP$/i, "").replace(/USDT$/i, "").toUpperCase();
+        if (oSym !== symCore) return false;
+        const oSide = String(o.side ?? o.posSide ?? "net").toLowerCase();
+        if (oSide === "net") return true;
+        return oSide === ledgerSide;
+    });
+
+    // 조건 1: sync_status 불일치
     if (["SIZE_MISMATCH", "NOTIONAL_MISMATCH", "KEY_MISMATCH"].includes(syncStatus)) {
         reasons.push(`OKX 수량·방향 불일치 (${syncStatus})`);
     }
@@ -351,12 +358,12 @@ function detectManualIntervention(
         }
     }
 
-    // 조건 2: OKX_ONLY — 원장에 없는 포지션이 OKX에 존재
+    // 조건 2: OKX_ONLY
     if (syncStatus === "OKX_ONLY") {
         reasons.push("OKX에만 포지션 존재 (엔진 원장 누락)");
     }
 
-    // 조건 3: currentPositions 대신 okx preview / position_ops_surface 폴백 사용
+    // 조건 3: 폴백 소스
     if (isFallbackSlot) {
         reasons.push("OKX preview/ops_surface 폴백 소스 사용 중 (원장 미연동)");
     }
@@ -364,7 +371,7 @@ function detectManualIntervention(
         reasons.push("원장에 없는 OKX 전용 포지션");
     }
 
-    // 조건 4: entryReason이 자동인데 OKX avgPx가 ledger entryPrice와 5% 초과 차이
+    // 조건 4: 자동 진입가 vs OKX avgPx 5% 초과
     const autoReasons = ["paper_long_candidate", "paper_short_candidate", "v2_", "CORE_", "SURGE_", "PROBE_"];
     const entryReason = String(ledgerPos.entryReason ?? ledgerPos.sourceSignal ?? "");
     const isAutoEntry = entryReason === "" || autoReasons.some((r) => entryReason.includes(r));
@@ -379,13 +386,32 @@ function detectManualIntervention(
         }
     }
 
-    // 조건 5: LEDGER_ONLY — 원장에만 있고 OKX에 없음
+    // 조건 5: LEDGER_ONLY
     if (syncStatus === "LEDGER_ONLY") {
         reasons.push("원장에만 포지션 존재 (OKX 실제 미보유 가능성)");
     }
 
+    // 조건 6: OKX preview에 해당 심볼 행이 존재하면서 수량/avgPx가 다를 때
+    // sync_status가 ALIGNED여도 OKX 행 데이터가 실제 다른 경우 표시
+    if (okxRow && reasons.length === 0) {
+        const ledgerPx = coerceFinite(ledgerPos.entryPrice);
+        const okxAvg = coerceFinite(okxRow.avgPx ?? okxRow.avg_px);
+        const ledgerSz2 = coerceFinite(ledgerPos.sizeContracts) ?? coerceFinite(ledgerPos.sizeUsd);
+        const okxSz2 = coerceFinite(okxRow.pos) ?? coerceFinite(okxRow.sz);
+        if (ledgerPx !== null && okxAvg !== null && ledgerPx > 0) {
+            const diff = Math.abs(ledgerPx - okxAvg) / ledgerPx;
+            if (diff > 0.01) {
+                reasons.push(`진입가 불일치: 레저 ${ledgerPx.toFixed(1)} / OKX ${okxAvg.toFixed(1)} (${(diff * 100).toFixed(1)}%)`);
+            }
+        }
+        if (ledgerSz2 !== null && okxSz2 !== null && Math.abs(ledgerSz2 - okxSz2) / Math.max(Math.abs(ledgerSz2), 1) > 0.01) {
+            reasons.push(`수량 불일치: 레저 ${ledgerSz2} / OKX ${okxSz2}`);
+        }
+    }
+
     return { suspected: reasons.length > 0, reasons };
 }
+
 
 /**
  * 전용 뷰 데이터를 구성하는 함수
@@ -427,9 +453,18 @@ function buildPositionDisplaySlots(bundle: Bundle): PositionDisplaySlot[] {
         seenKeys.add(positionRowKey(sym, side));
 
         const { suspected, reasons } = detectManualIntervention(p, sync as Record<string, unknown> | null, false);
-        const okxActual = preview.find(
-            (o) => String(o.symbol) === sym && String(o.side ?? "").toLowerCase() === side
-        ) ?? null;
+
+        // OKX preview 행 매칭: symbol + side/posSide 기준
+        // OKX는 심볼을 "BTCUSDT" 또는 "BTC-USDT-SWAP" 형식으로 줄 수 있으므로 includes로 비교
+        const symCore = sym.replace(/-USDT-SWAP$/i, "").replace(/USDT$/i, "").toUpperCase();
+        const okxActual = preview.find((o) => {
+            const oSym = String(o.symbol ?? "").replace(/-USDT-SWAP$/i, "").replace(/USDT$/i, "").toUpperCase();
+            if (oSym !== symCore) return false;
+            const oSide = String(o.side ?? o.posSide ?? "net").toLowerCase();
+            // "net" 는 단일 포지션 모드이므로 side 무관하게 매칭
+            if (oSide === "net") return true;
+            return oSide === side;
+        }) ?? null;
 
         slots.push({
             pos: p,
