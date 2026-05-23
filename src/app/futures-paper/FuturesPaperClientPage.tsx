@@ -1324,10 +1324,26 @@ function SymbolStatusCard({
     const sym = String(row.symbol);
     const symbolData = (symbolDecisions as Record<string, any> | null)?.[sym];
     const rep = getRepresentativeStatus(row, symbolData, hasPosition);
-    const stateLabel = deriveOperationalCardLabel(bundle, row, hasPosition);
 
+    // POLARITY_MISMATCH 차단 조건 판정
     const bRec = bundle as Record<string, unknown>;
     const auditRow = pickNoEntryAuditRow(bRec, sym);
+    const hasPolarityMismatch = auditRow != null && 
+        auditRow.expected_missing_condition != null && 
+        String(auditRow.expected_missing_condition).includes("POLARITY_MISMATCH");
+    const isLongCandidate = auditRow != null && 
+        (auditRow.trend_side_candidate === "long" || auditRow.trend_side_candidate === "LONG");
+    const isHtfBearish = auditRow != null && (
+        String(auditRow.htf_1h_bias).toUpperCase() === "BEARISH" ||
+        String(auditRow.htf_4h_bias).toUpperCase() === "BEARISH" ||
+        String(auditRow.htf_1d_bias).toUpperCase() === "BEARISH"
+    );
+    const isPolarityMismatchBlockedLong = hasPolarityMismatch && isLongCandidate && isHtfBearish;
+
+    const rawStateLabel = deriveOperationalCardLabel(bundle, row, hasPosition);
+    const stateLabel = (isPolarityMismatchBlockedLong && !hasPosition) ? "관망 중" : rawStateLabel;
+
+
     const judgeTs = noEntryJudgmentTsMs(auditRow);
     const auditMissing = auditRow === null;
     const stale = judgeTs === null ? true : isStaleNoEntryAudit(judgeTs, clientNowMs);
@@ -1451,11 +1467,30 @@ function SymbolStatusCard({
         const counterTrend = auditRow.counter_trend_risk;
         const showHtf = noEntryRowHasHtf(rowRec);
 
+        // POLARITY_MISMATCH 차단 조건 판정
+        const hasPolarityMismatch = exp != null && String(exp).includes("POLARITY_MISMATCH");
+        const isLongCandidate = auditRow.trend_side_candidate === "long" || auditRow.trend_side_candidate === "LONG";
+        const isHtfBearish = 
+            String(rowRec.htf_1h_bias).toUpperCase() === "BEARISH" ||
+            String(rowRec.htf_4h_bias).toUpperCase() === "BEARISH" ||
+            String(rowRec.htf_1d_bias).toUpperCase() === "BEARISH";
+        const isPolarityMismatchBlockedLong = hasPolarityMismatch && isLongCandidate && isHtfBearish;
+
+        const missingConditionTitle = "무진입 사유";
+        const missingConditionText = isPolarityMismatchBlockedLong
+            ? "상위봉 Bearish 상태에서 Long 반등 후보가 감지됐지만, 방향 불일치로 차단 중"
+            : mapNoEntryExpectedMissing(exp);
+
+        const nextActionTitle = isPolarityMismatchBlockedLong ? "진입 조건" : "다음 대기";
+        const nextActionText = isPolarityMismatchBlockedLong
+            ? "상위봉 정렬 회복 또는 Short 후보 재형성 필요"
+            : mapNoEntryNextAction(next);
+
         body = (
             <div className="mt-3 min-w-0 space-y-4 overflow-hidden">
                 <div className="space-y-4 border-b border-slate-100 pb-4">
-                    {auditTextBlock("무진입 사유", mapNoEntryExpectedMissing(exp), noEntryExpectedMissingRawForDetail(exp))}
-                    {auditTextBlock("다음 대기", mapNoEntryNextAction(next), noEntryNextActionRawForDetail(next))}
+                    {auditTextBlock(missingConditionTitle, missingConditionText, noEntryExpectedMissingRawForDetail(exp))}
+                    {auditTextBlock(nextActionTitle, nextActionText, noEntryNextActionRawForDetail(next))}
                 </div>
 
                 {showHtf ? (
@@ -1493,7 +1528,51 @@ function SymbolStatusCard({
                 ) : null}
 
                 <div className="grid grid-cols-1 gap-x-3 gap-y-3 sm:grid-cols-2">
-                    {kvLine("후보 방향", formatSideCandidateEn(auditRow.trend_side_candidate))}
+                    {(() => {
+                        const candidateDirection = formatSideCandidateEn(auditRow.trend_side_candidate);
+                        const isHtfHold = htfPolicy === "HOLD";
+
+                        if (candidateDirection && candidateDirection !== "관망" && candidateDirection !== "—" && hasPolarityMismatch) {
+                            const isShortCandidate = auditRow.trend_side_candidate === "short" || auditRow.trend_side_candidate === "SHORT";
+                            const isHtfBullish = 
+                                String(rowRec.htf_1h_bias).toUpperCase() === "BULLISH" ||
+                                String(rowRec.htf_4h_bias).toUpperCase() === "BULLISH" ||
+                                String(rowRec.htf_1d_bias).toUpperCase() === "BULLISH";
+
+                            let blockMessage = "방향 불일치로 진입 차단";
+                            if (isLongCandidate && isHtfBearish) {
+                                blockMessage = "상위봉 Bearish와 Long shock 불일치로 진입 차단";
+                            } else if (isShortCandidate && isHtfBullish) {
+                                blockMessage = "상위봉 Bullish와 Short shock 불일치로 진입 차단";
+                            }
+
+                            return (
+                                <div className="min-w-0">
+                                    <span className="inline-block max-w-full text-[10px] font-bold uppercase tracking-wider text-rose-500">차단된 후보 방향</span>
+                                    <p className="mt-0.5 text-xs font-semibold text-rose-600">
+                                        {candidateDirection}
+                                    </p>
+                                    <p className="mt-1 text-[10px] font-bold text-rose-500 leading-snug">
+                                        {blockMessage}
+                                    </p>
+                                </div>
+                            );
+                        } else if (isHtfHold) {
+                            return (
+                                <div className="min-w-0">
+                                    <span className="inline-block max-w-full text-[10px] font-bold uppercase tracking-wider text-slate-400">진입 정책</span>
+                                    <p className="mt-0.5 text-xs font-semibold text-slate-700">
+                                        상위봉 정렬 대기
+                                    </p>
+                                    <p className="mt-1 text-[10px] text-slate-400 leading-snug">
+                                        현재 후보 방향은 관찰용이며 진입 허용 상태가 아닙니다.
+                                    </p>
+                                </div>
+                            );
+                        } else {
+                            return kvLine("후보 방향", candidateDirection);
+                        }
+                    })()}
                     {kvLine("구간", zone)}
                     {kvLine("품질", q)}
                     {kvLine("추격 차단", formatBoolKo(auditRow.chase_blocked))}
