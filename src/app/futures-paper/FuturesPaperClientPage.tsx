@@ -758,6 +758,44 @@ function getRepresentativeStatus(row: any, symbolData: any, hasPosition: boolean
     return buildSymbolStatusDisplay(decisionData);
 }
 
+function getDirectionBadgeColor(dir: string | null | undefined): string {
+    if (!dir) return "bg-slate-50 text-slate-400 border border-slate-100";
+    const d = dir.toLowerCase();
+    if (d === "long" || d === "buy" || d === "bullish") {
+        return "bg-emerald-50 text-emerald-600 border border-emerald-100";
+    }
+    if (d === "short" || d === "sell" || d === "bearish") {
+        return "bg-rose-50 text-rose-600 border border-rose-100";
+    }
+    return "bg-slate-50 text-slate-500 border border-slate-100";
+}
+
+function renderSplitDirections(okxSide: string, candidateDirection: string | null) {
+    const okxLabel = okxSide ? (okxSide.toLowerCase() === "short" ? "OKX Short" : "OKX Long") : "OKX 무포지션";
+    const candLabel = candidateDirection ? (candidateDirection.toLowerCase() === "short" ? "판단 Short" : "판단 Long") : "판단 관망";
+    
+    const okxCls = getDirectionBadgeColor(okxSide);
+    const candCls = getDirectionBadgeColor(candidateDirection);
+
+    return (
+        <div className="flex items-center gap-1.5 text-[10px] font-extrabold">
+            <span className={`rounded px-2 py-0.5 ${okxCls}`}>
+                {okxLabel}
+            </span>
+            <span className="text-slate-300">|</span>
+            <span className={`rounded px-2 py-0.5 ${candCls}`}>
+                {candLabel}
+            </span>
+        </div>
+    );
+}
+
+function getDirectionConflictMessage(okxSide: string, candidateDirection: string | null): string {
+    const okxLabel = okxSide.toUpperCase() === "SHORT" ? "Short" : "Long";
+    const candLabel = candidateDirection ? (candidateDirection.toUpperCase() === "SHORT" ? "Short" : "Long") : "관망(None)";
+    return `[방향 충돌 감지] OKX 실제 포지션은 ${okxLabel} 상태이나, 현재 시장판단은 ${candLabel} 방향을 가리키고 있습니다.`;
+}
+
 function PositionMoneyCard({
     pos,
     row,
@@ -766,7 +804,8 @@ function PositionMoneyCard({
     exchangeDiagnosticBadge,
     exchangeStatusHeadline,
     manualInterventionSuspected = false,
-    okxActual = null
+    okxActual = null,
+    conflictInfo = null
 }: {
     pos: Record<string, any>;
     row: Record<string, unknown> | undefined;
@@ -776,6 +815,20 @@ function PositionMoneyCard({
     exchangeStatusHeadline?: string | null;
     manualInterventionSuspected?: boolean;
     okxActual?: Record<string, unknown> | null;
+    conflictInfo?: {
+        okxSide: string;
+        htfBias: string | null;
+        candidateDirection: string | null;
+        severity: "conflict" | "warning" | "none";
+        message: string;
+        nextAction: string | null;
+        noEntryReason: string | null;
+        htf_5m_bias: string | null;
+        htf_15m_bias: string | null;
+        htf_1h_bias: string | null;
+        htf_4h_bias: string | null;
+        htf_1d_bias: string | null;
+    } | null;
 }) {
     const n = normalizeOpenPos(pos);
     const sym = String(pos.symbol ?? "");
@@ -788,7 +841,18 @@ function PositionMoneyCard({
     const hold = formatHoldShort(n?.openedAt ?? null);
     const uClass =
         uPnL === null ? "text-slate-400" : uPnL >= 0 ? "text-emerald-600" : "text-rose-600";
-    const side = pos.side === "short" ? "Short" : "Long";
+    
+    // 보유 방향: 반드시 OKX 실제 포지션 기준
+    let displaySide = "Long";
+    const rawSide = okxActual 
+        ? String(okxActual.side ?? okxActual.posSide ?? "").toLowerCase()
+        : String(pos.side ?? "").toLowerCase();
+
+    if (rawSide === "short" || rawSide === "sell") {
+        displaySide = "Short";
+    } else if (rawSide === "long" || rawSide === "buy") {
+        displaySide = "Long";
+    }
 
     const stopDisplay =
         n?.stopPx !== null && n?.stopPx !== undefined && Number.isFinite(n.stopPx!)
@@ -849,31 +913,57 @@ function PositionMoneyCard({
         if (tp !== null) exitTargetValue = formatPrice(tp);
     }
 
+    // 충돌 상태 보더 & 배경 결정
+    const conflictSeverity = conflictInfo?.severity ?? "none";
+    let containerBorderCls = "border-slate-200 bg-white";
+    if (conflictSeverity === "conflict") {
+        containerBorderCls = "border-rose-300 bg-rose-50/10 shadow-rose-50/50";
+    } else if (conflictSeverity === "warning") {
+        containerBorderCls = "border-amber-300 bg-amber-50/10 shadow-amber-50/50";
+    } else if (exchangeDiagnosticBadge || manualInterventionSuspected) {
+        containerBorderCls = "border-amber-200 bg-amber-50/10";
+    }
+
     return (
-        <div
-            className={`rounded-lg border p-5 shadow-sm ${
-                exchangeDiagnosticBadge
-                    ? "border-amber-200 bg-amber-50/25"
-                    : "border-slate-200 bg-white"
-            }`}
-        >
+        <div className={`rounded-xl border p-5 shadow-sm transition-all hover:shadow-md ${containerBorderCls}`}>
             {exchangeDiagnosticBadge && (
                 <div className="mb-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] font-bold text-amber-900">
                     경고: {exchangeDiagnosticBadge}
                 </div>
             )}
+
+            {/* 방향 충돌 경고창 */}
+            {conflictSeverity !== "none" && conflictInfo && (
+                <div className={`mb-4 rounded-lg border px-4 py-3 text-xs font-semibold shadow-sm ${
+                    conflictSeverity === "conflict" 
+                        ? "border-rose-200 bg-rose-50 text-rose-900" 
+                        : "border-amber-200 bg-amber-50 text-amber-900"
+                }`}>
+                    <div className="flex items-start gap-2.5">
+                        <span className="text-lg leading-none">{conflictSeverity === "conflict" ? "⛔" : "⚠"}</span>
+                        <div className="space-y-1">
+                            <p className="font-extrabold">{conflictInfo.message}</p>
+                            <p className="font-bold text-rose-600">
+                                {getDirectionConflictMessage(displaySide, conflictInfo.candidateDirection)}
+                            </p>
+                            <p className="font-medium text-slate-500">
+                                이는 표시 오류가 아니라 실제 보유 포지션과 시스템 시장판단 방향이 다른 상태입니다.
+                            </p>
+                        </div>
+                    </div>
+                </div>
+            )}
+
             <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
                 <div className="flex items-center gap-3">
                     <span className="font-mono text-lg font-bold text-slate-800 notranslate" translate="no">{sym}</span>
-                    <span className={`rounded px-2 py-0.5 text-[10px] font-bold ${pos.side === "short" ? "bg-rose-50 text-rose-600 border border-rose-100" : "bg-emerald-50 text-emerald-600 border border-emerald-100"}`}>
-                        {side}
-                    </span>
+                    {renderSplitDirections(displaySide, conflictInfo?.candidateDirection ?? null)}
                     {rb && (
                         <span className={`rounded px-2 py-0.5 text-[9px] font-bold border ${rb.cls}`}>
                             {rb.text}
                         </span>
                     )}
-                    <span className="text-xs font-medium text-slate-400">· {hold}</span>
+                    <span className="text-xs font-medium text-slate-400">· {hold} 보유 중</span>
                 </div>
                 <div className="flex items-center gap-2">
                     <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400">현재 상태:</span>
@@ -2012,19 +2102,71 @@ export default function FuturesPaperClientPage({ initialBundle }: { initialBundl
                                         <p className="text-xs font-bold text-slate-400">보유 포지션 없음</p>
                                     </div>
                                 ) : (
-                                    positionSlots.map((slot, i) => (
-                                        <PositionMoneyCard
-                                            key={i}
-                                            pos={slot.pos}
-                                            row={bundle.symbolRows?.find((r) => r.symbol === slot.pos.symbol)}
-                                            symbolDecisions={symbolDecisions}
-                                            showInternalTags={showInternalTags}
-                                            exchangeDiagnosticBadge={slot.exchangeDiagnosticBadge}
-                                            exchangeStatusHeadline={slot.exchangeStatusHeadline}
-                                            manualInterventionSuspected={slot.manualInterventionSuspected}
-                                            okxActual={slot.okxActual}
-                                        />
-                                    ))
+                                    positionSlots.map((slot, i) => {
+                                        const sym = slot.pos.symbol;
+                                        const auditRow = pickNoEntryAuditRow(bundle as any, sym);
+                                        const candidateDirection = auditRow ? formatSideCandidateEn(auditRow.trend_side_candidate) : null;
+                                        const htfBias = auditRow ? (auditRow.htf_1d_bias ?? auditRow.htf_4h_bias ?? auditRow.htf_1h_bias ?? null) : null;
+                                        const nextAction = auditRow ? String(auditRow.expected_next_action ?? "") : null;
+                                        const noEntryReason = auditRow ? String(auditRow.expected_missing_condition ?? "") : null;
+                                        const okxSide = slot.okxActual 
+                                            ? String(slot.okxActual.side ?? slot.okxActual.posSide ?? "").toLowerCase() 
+                                            : String(slot.pos.side ?? "").toLowerCase();
+
+                                        let severity: "conflict" | "warning" | "none" = "none";
+                                        let message = "";
+                                        const sideLower = okxSide.toLowerCase();
+                                        const candLower = candidateDirection ? candidateDirection.toLowerCase() : null;
+                                        const htfLower = htfBias ? htfBias.toLowerCase() : null;
+
+                                        if (sideLower === "long" || sideLower === "buy") {
+                                            if (candLower === "short") {
+                                                severity = "conflict";
+                                                message = "OKX 실제 포지션은 Long 보유 중이나, 현재 시장판단은 Short 우세입니다.";
+                                            } else if (htfLower === "bearish") {
+                                                severity = "warning";
+                                                message = "OKX 실제 포지션은 Long 보유 중이나, 현재 시장판단은 Bearish 우세입니다.";
+                                            }
+                                        } else if (sideLower === "short" || sideLower === "sell") {
+                                            if (candLower === "long") {
+                                                severity = "conflict";
+                                                message = "OKX 실제 포지션은 Short 보유 중이나, 현재 시장판단은 Long 우세입니다.";
+                                            } else if (htfLower === "bullish") {
+                                                severity = "warning";
+                                                message = "OKX 실제 포지션은 Short 보유 중이나, 현재 시장판단은 Bullish 우세입니다.";
+                                            }
+                                        }
+
+                                        const conflictInfo = {
+                                            okxSide: sideLower === "short" ? "Short" : "Long",
+                                            htfBias,
+                                            candidateDirection,
+                                            severity,
+                                            message,
+                                            nextAction,
+                                            noEntryReason,
+                                            htf_5m_bias: auditRow ? auditRow.htf_5m_bias : null,
+                                            htf_15m_bias: auditRow ? auditRow.htf_15m_bias : null,
+                                            htf_1h_bias: auditRow ? auditRow.htf_1h_bias : null,
+                                            htf_4h_bias: auditRow ? auditRow.htf_4h_bias : null,
+                                            htf_1d_bias: auditRow ? auditRow.htf_1d_bias : null,
+                                        };
+
+                                        return (
+                                            <PositionMoneyCard
+                                                key={i}
+                                                pos={slot.pos}
+                                                row={bundle.symbolRows?.find((r) => r.symbol === slot.pos.symbol)}
+                                                symbolDecisions={symbolDecisions}
+                                                showInternalTags={showInternalTags}
+                                                exchangeDiagnosticBadge={slot.exchangeDiagnosticBadge}
+                                                exchangeStatusHeadline={slot.exchangeStatusHeadline}
+                                                manualInterventionSuspected={slot.manualInterventionSuspected}
+                                                okxActual={slot.okxActual}
+                                                conflictInfo={conflictInfo}
+                                            />
+                                        );
+                                    })
                                 )}
                             </div>
                         </section>
