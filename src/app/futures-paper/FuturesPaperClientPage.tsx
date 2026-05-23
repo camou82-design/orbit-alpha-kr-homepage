@@ -828,6 +828,7 @@ function PositionMoneyCard({
         htf_1h_bias: string | null;
         htf_4h_bias: string | null;
         htf_1d_bias: string | null;
+        sideVetoDetail?: string | null;
     } | null;
 }) {
     const n = normalizeOpenPos(pos);
@@ -958,6 +959,11 @@ function PositionMoneyCard({
                 <div className="flex items-center gap-3">
                     <span className="font-mono text-lg font-bold text-slate-800 notranslate" translate="no">{sym}</span>
                     {renderSplitDirections(displaySide, conflictInfo?.candidateDirection ?? null)}
+                    {conflictInfo?.sideVetoDetail === "SHOCK_REACTION_PROMOTION_BYPASS_RANGE_SIDE_VETO" && (
+                        <span className="rounded bg-sky-50 px-2 py-0.5 text-[9px] font-bold text-sky-600 border border-sky-100 animate-pulse">
+                            Veto Bypass
+                        </span>
+                    )}
                     {rb && (
                         <span className={`rounded px-2 py-0.5 text-[9px] font-bold border ${rb.cls}`}>
                             {rb.text}
@@ -2150,6 +2156,7 @@ export default function FuturesPaperClientPage({ initialBundle }: { initialBundl
                                             htf_1h_bias: auditRow ? auditRow.htf_1h_bias : null,
                                             htf_4h_bias: auditRow ? auditRow.htf_4h_bias : null,
                                             htf_1d_bias: auditRow ? auditRow.htf_1d_bias : null,
+                                            sideVetoDetail: auditRow ? String(auditRow.side_veto_detail ?? "") : null,
                                         };
 
                                         return (
