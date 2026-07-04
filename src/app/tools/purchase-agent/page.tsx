@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
+import { parse1688DumpText, ParseResult } from './parser';
 
 // 시장성 확인 체크 항목 타입
 interface Marketability {
@@ -83,6 +84,11 @@ export default function PurchaseAgentPage() {
   const [mounted, setMounted] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
 
+  // 2차 작업: 수동 덤프 파싱 상태
+  const [rawDumpText, setRawDumpText] = useState('');
+  const [parseResult, setParseResult] = useState<ParseResult | null>(null);
+  const [dumpError, setDumpError] = useState('');
+
   // hydration 에러 방지를 위한 마운트 체크 및 로컬스토리지 데이터 로드
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -98,6 +104,66 @@ export default function PurchaseAgentPage() {
     }, 0);
     return () => clearTimeout(timer);
   }, []);
+
+  const handleDumpAnalysis = () => {
+    setDumpError('');
+    if (!rawDumpText.trim()) {
+      setDumpError('분석할 텍스트를 입력해주세요.');
+      setParseResult(null);
+      return;
+    }
+
+    try {
+      const result = parse1688DumpText(rawDumpText);
+      setParseResult(result);
+
+      // 기존 폼 상태 자동 반영
+      setFormData((prev) => {
+        const updated = { ...prev };
+        
+        if (result.titleCandidate && result.titleCandidate !== '수기 입력 필요') {
+          updated.productName = result.titleCandidate;
+        }
+        
+        // 최저 위안화 공급가 주입
+        if (result.priceMin !== null) {
+          updated.supplyPrice = result.priceMin;
+        }
+
+        if (result.optionCountEstimated !== null) {
+          updated.optionCount = result.optionCountEstimated;
+        }
+
+        // 메모 란에 위안화 원문 및 요약 기록 (수기 변환 지침 추가)
+        const priceRangeInfo = result.priceMin !== null 
+          ? `[1688 위안화 가격 후보: 최저 ¥${result.priceMin} ~ 최고 ¥${result.priceMax || result.priceMin} (원화 수기 변환 필요)]`
+          : '[1688 가격 후보 감지 실패: 공급가 수기 확인 필요]';
+        const optionInfo = result.optionStatus === 'DETECTED' 
+          ? `[추정 옵션 수: ${result.optionCountEstimated}개]` 
+          : '[옵션 감지 불확실: 수기 확인 필요]';
+
+        const summaryText = result.summaryText ? `\n[원문 요약]: ${result.summaryText}` : '';
+
+        // 위험/검토 키워드가 발견되었을 때 메모 란에 경고 삽입
+        const warningInfo = [];
+        if (result.foundHighRiskKeywords.length > 0) {
+          warningInfo.push(`[고위험 키워드 감지: ${result.foundHighRiskKeywords.join(', ')}]`);
+        }
+        if (result.foundReviewKeywords.length > 0) {
+          warningInfo.push(`[검토 키워드 감지: ${result.foundReviewKeywords.join(', ')}]`);
+        }
+        const warningText = warningInfo.length > 0 ? `\n${warningInfo.join('\n')}` : '';
+
+        updated.memo = `${priceRangeInfo}\n${optionInfo}${warningText}${summaryText}\n\n${prev.memo}`.trim();
+
+        return updated;
+      });
+
+    } catch (e) {
+      console.error(e);
+      setDumpError('텍스트 분석 중 시스템 에러가 발생했습니다.');
+    }
+  };
 
   // 입력값 헬퍼 함수
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
@@ -133,13 +199,13 @@ export default function PurchaseAgentPage() {
   const margin = formData.sellingPrice - totalCost;
   const marginPercent = formData.sellingPrice > 0 ? (margin / formData.sellingPrice) * 100 : 0;
 
-  // 키워드 검출
-  const productNameLower = formData.productName.toLowerCase();
+  // 키워드 검출 (상품명 및 메모 전체 대상)
+  const textToScan = `${formData.productName} ${formData.memo}`.toLowerCase();
   const foundHighRisk = HIGH_RISK_KEYWORDS.filter((kw) =>
-    productNameLower.includes(kw.toLowerCase())
+    textToScan.includes(kw.toLowerCase())
   );
   const foundReview = REVIEW_KEYWORDS.filter((kw) =>
-    productNameLower.includes(kw.toLowerCase())
+    textToScan.includes(kw.toLowerCase())
   );
 
   // 시장성 체크 개수
@@ -612,6 +678,132 @@ export default function PurchaseAgentPage() {
                 >
                   🗑️ 저장소 비우기
                 </button>
+              </div>
+            )}
+          </div>
+
+          {/* Sourcing Text Dump Parser Panel */}
+          <div className="glass-card p-6 lg:p-8 border-[#00F2FF]/20 bg-[linear-gradient(135deg,rgba(13,22,45,0.4),rgba(3,5,9,0.4))] mb-8 space-y-4 shadow-xl">
+            <h2 className="text-[18px] font-black font-outfit text-white flex items-center gap-2">
+              📋 1688 소싱 텍스트 분석기
+              <span className="text-[11px] font-black px-2 py-0.5 rounded bg-[#00F2FF]/10 text-[#00F2FF] border border-[#00F2FF]/20">2차 수동 덤프 파서</span>
+            </h2>
+            <p className="text-[12px] text-[#94A3B8] font-medium leading-5">
+              1688 상품 상세페이지에서 전체 복사(<kbd className="px-1.5 py-0.5 bg-black/40 rounded border border-white/10">Ctrl+A</kbd> &rarr; <kbd className="px-1.5 py-0.5 bg-black/40 rounded border border-white/10">Ctrl+C</kbd>)한 전체 텍스트를 붙여넣으세요. 상품명, 위안화 가격 후보, 옵션 수, 위험/검토 키워드를 즉시 추출하여 기존 심사 폼에 자동 반영해 줍니다.
+            </p>
+            <div className="space-y-3">
+              <label className="block text-[13px] font-black tracking-wide text-white/80 uppercase">
+                소싱 텍스트 붙여넣기
+              </label>
+              <textarea
+                value={rawDumpText}
+                onChange={(e) => setRawDumpText(e.target.value)}
+                placeholder="여기에 1688 상세페이지 전체 복사 텍스트를 붙여넣으세요..."
+                rows={4}
+                className="cyber-input text-[12px]"
+              />
+              {dumpError && (
+                <div className="text-[12px] text-red-400 font-bold">
+                  ⚠️ {dumpError}
+                </div>
+              )}
+              <div className="flex justify-between items-center gap-4">
+                <button
+                  type="button"
+                  onClick={handleDumpAnalysis}
+                  className="px-6 py-3 rounded-xl btn-gold text-[13px] font-bold"
+                >
+                  ⚡ 텍스트 분석
+                </button>
+                {parseResult && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setRawDumpText('');
+                      setParseResult(null);
+                      setDumpError('');
+                    }}
+                    className="text-[12px] text-white/50 hover:text-white"
+                  >
+                    결과 지우기
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {/* Parsing Result Visual Feedback */}
+            {parseResult && (
+              <div className="mt-4 p-5 rounded-2xl bg-black/40 border border-white/5 grid md:grid-cols-2 gap-5 text-[13px] transition-all duration-300">
+                <div className="space-y-2">
+                  <h4 className="text-[12px] text-[#00F2FF] font-black uppercase tracking-wider">🔍 추출 데이터 후보</h4>
+                  <div className="space-y-1">
+                    <div className="text-white/60">
+                      <span className="font-bold">상품명 후보:</span> <span className="text-white">{parseResult.titleCandidate}</span>
+                    </div>
+                    <div className="text-white/60">
+                      <span className="font-bold">위안화 최저가:</span>{' '}
+                      <span className="text-[#FFD700] font-bold">
+                        {parseResult.priceMin !== null ? `¥ ${parseResult.priceMin.toLocaleString()}` : '감지 실패'}
+                      </span>
+                    </div>
+                    <div className="text-white/60">
+                      <span className="font-bold">위안화 최고가:</span>{' '}
+                      <span className="text-[#FFD700] font-bold">
+                        {parseResult.priceMax !== null ? `¥ ${parseResult.priceMax.toLocaleString()}` : '감지 실패'}
+                      </span>
+                    </div>
+                    <div className="text-white/60">
+                      <span className="font-bold">추정 옵션 수:</span>{' '}
+                      <span className="text-white">
+                        {parseResult.optionCountEstimated}개{' '}
+                        {parseResult.optionStatus === 'DETECTED' ? (
+                          <span className="text-[10px] text-[#00F2FF] font-bold">(자동 감지)</span>
+                        ) : (
+                          <span className="text-[10px] text-[#C084FC] font-bold">(수기 확인 필요)</span>
+                        )}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <h4 className="text-[12px] text-[#00F2FF] font-black uppercase tracking-wider">⚠️ 원문 내 키워드 스캔 결과</h4>
+                  <div className="space-y-1.5">
+                    <div>
+                      <span className="font-bold text-red-400 block text-[11px] mb-0.5">고위험 키워드:</span>
+                      {parseResult.foundHighRiskKeywords.length > 0 ? (
+                        <div className="flex flex-wrap gap-1">
+                          {parseResult.foundHighRiskKeywords.map(kw => (
+                            <span key={kw} className="px-2 py-0.5 rounded bg-red-950 text-red-400 border border-red-900/30 text-[11px] font-bold">{kw}</span>
+                          ))}
+                        </div>
+                      ) : (
+                        <span className="text-white/40 text-[12px]">없음</span>
+                      )}
+                    </div>
+                    <div>
+                      <span className="font-bold text-[#FFD700] block text-[11px] mb-0.5">주의/검토 키워드:</span>
+                      {parseResult.foundReviewKeywords.length > 0 ? (
+                        <div className="flex flex-wrap gap-1">
+                          {parseResult.foundReviewKeywords.map(kw => (
+                            <span key={kw} className="px-2 py-0.5 rounded bg-yellow-950 text-[#FFD700] border border-yellow-900/30 text-[11px] font-bold">{kw}</span>
+                          ))}
+                        </div>
+                      ) : (
+                        <span className="text-white/40 text-[12px]">없음</span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="md:col-span-2 border-t border-white/5 pt-3 flex justify-between items-center">
+                  <span className="text-[11px] text-[#94A3B8]">
+                    * 추출된 값들이 기존 입력 폼에 즉시 세팅되었습니다. 공급가(위안화)는 수동 환율 적용 확인 후 원화로 보완하여 주십시오.
+                  </span>
+                  <span className={`px-2.5 py-1 rounded-full text-[11px] font-black border ${parseResult.priceMin === null || parseResult.optionStatus === 'MANUAL_REQUIRED' ? 'border-[#C084FC] bg-[#C084FC]/10 text-[#C084FC]' : 'border-[#00F2FF] bg-[#00F2FF]/10 text-[#00F2FF]'}`}>
+                    {parseResult.priceMin === null || parseResult.optionStatus === 'MANUAL_REQUIRED' ? '⚠️ 수기 확인 필요' : '✓ 폼에 반영됨'}
+                  </span>
+                </div>
               </div>
             )}
           </div>
