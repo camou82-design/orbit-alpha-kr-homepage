@@ -255,6 +255,8 @@ type PositionDisplaySlot = Readonly<{
     exchangeStatusHeadline: string | null;
     manualInterventionSuspected: boolean;
     manualInterventionReasons: string[];
+    syncMismatchDetected: boolean;
+    syncMismatchReasons: string[];
     /** OKX 실제 포지션 (okx_positions_preview 행) */
     okxActual: Record<string, unknown> | null;
 }>;
@@ -317,6 +319,16 @@ function getActivePositions(bundle: Bundle): { positions: Array<Record<string, a
     return { positions: ledgerOpen, isFallback };
 }
 
+function getDiagnosticLedgerPositions(bundle: Bundle): Array<Record<string, any>> {
+    let authoritativeRaw: any[] = [];
+    if (Array.isArray(bundle.currentPositions)) {
+        authoritativeRaw = bundle.currentPositions;
+    } else {
+        authoritativeRaw = Array.isArray(bundle.openPositions) ? bundle.openPositions : [];
+    }
+    return authoritativeRaw.filter((p) => p && (p.status === undefined || String(p.status) === "open"));
+}
+
 /**
  * OKX preview row + 현재가(mark)로 추정 미실현 손익 계산
  * upl 필드 없을 때 사용. 반드시 "(추정)" 레이블 부착 필요.
@@ -360,7 +372,28 @@ function estimateOkxPnl(
  * 수동 개입 감지 판정 (5조건)
  * 조건 중 하나라도 해당하면 manualInterventionSuspected = true
  */
-function detectManualIntervention(
+function hasExplicitIndependentManualEvidenceForDisplay(pos: Record<string, unknown>): boolean {
+    if (!pos) return false;
+
+    // 1. EXTERNAL_MANUAL_POSITION / OPERATOR_MANAGED 무조건 true (independent=false여도 true)
+    const ls = String(pos.lifecycleState || "");
+    if (ls === "EXTERNAL_MANUAL_POSITION" || ls === "OPERATOR_MANAGED") return true;
+
+    // 2. manualLifecycleEvidenceIndependent === true 무조건 true
+    if (pos.manualLifecycleEvidenceIndependent === true) return true;
+
+    // 3. 그 다음 independent === false 이면 파생 상태(latch, EXTERNAL_MANUAL_MANAGED 등)는 차단
+    if (pos.manualLifecycleEvidenceIndependent === false) return false;
+
+    // 4. STRONG latch + 명시적 source 확인
+    if (pos.manualOwnershipLatch === true && String(pos.manualOwnershipLatchStrength || "") === "STRONG") {
+       if (String(pos.authoritySourceAtEntry || "") === "EXPLICIT_EXTERNAL_FILL") return true;
+    }
+
+    return false;
+}
+
+function detectPositionSyncMismatch(
     ledgerPos: Record<string, unknown>,
     sync: Record<string, unknown> | null | undefined,
     isFallbackSlot: boolean
@@ -375,11 +408,17 @@ function detectManualIntervention(
     const sym = String(ledgerPos.symbol ?? "");
     const ledgerSide = String(ledgerPos.side ?? "long").toLowerCase();
 
-    // 심볼·방향 매칭: OKX는 "BTC-USDT-SWAP" 또는 "BTCUSDT", posSide/net 처리
+    // 심볼 매칭: OKX는 "BTC-USDT-SWAP" 또는 "BTCUSDT", posSide/net 처리
     const symCore = sym.replace(/-USDT-SWAP$/i, "").replace(/USDT$/i, "").toUpperCase();
-    const okxRow = preview.find((o) => {
+    
+    // okxSymbolRow: 해당 심볼의 어떤 행이든 먼저 찾음
+    const okxSymbolRows = preview.filter((o) => {
         const oSym = String(o.symbol ?? "").replace(/-USDT-SWAP$/i, "").replace(/USDT$/i, "").toUpperCase();
-        if (oSym !== symCore) return false;
+        return oSym === symCore;
+    });
+    
+    // okxSameSideRow: 방향이 같은 행 찾음 (net 포함)
+    const okxSameSideRow = okxSymbolRows.find((o) => {
         const oSide = String(o.side ?? o.posSide ?? "net").toLowerCase();
         if (oSide === "net") return true;
         return oSide === ledgerSide;
@@ -389,9 +428,11 @@ function detectManualIntervention(
     if (["SIZE_MISMATCH", "NOTIONAL_MISMATCH", "KEY_MISMATCH"].includes(syncStatus)) {
         reasons.push(`OKX 수량·방향 불일치 (${syncStatus})`);
     }
-    if (okxRow) {
+    
+    // 사이즈 비교는 same-side가 있을 때만
+    if (okxSameSideRow) {
         const ledgerSz = coerceFinite(ledgerPos.sizeUsd) ?? coerceFinite(ledgerPos.sizeContracts);
-        const okxSz = coerceFinite(okxRow.pos) ?? coerceFinite(okxRow.notional);
+        const okxSz = coerceFinite(okxSameSideRow.pos) ?? coerceFinite(okxSameSideRow.notional);
         if (ledgerSz !== null && okxSz !== null && Math.abs(ledgerSz - okxSz) / Math.max(Math.abs(ledgerSz), 1) > 0.05) {
             reasons.push(`레저/OKX 수량 편차 ${((Math.abs(ledgerSz - okxSz) / Math.abs(ledgerSz)) * 100).toFixed(1)}%`);
         }
@@ -410,13 +451,13 @@ function detectManualIntervention(
         reasons.push("원장에 없는 OKX 전용 포지션");
     }
 
-    // 조건 4: 자동 진입가 vs OKX avgPx 5% 초과
+    // 조건 4: 자동 진입가 vs OKX avgPx 5% 초과 (same-side 기준)
     const autoReasons = ["paper_long_candidate", "paper_short_candidate", "v2_", "CORE_", "SURGE_", "PROBE_"];
     const entryReason = String(ledgerPos.entryReason ?? ledgerPos.sourceSignal ?? "");
     const isAutoEntry = entryReason === "" || autoReasons.some((r) => entryReason.includes(r));
-    if (isAutoEntry && okxRow) {
+    if (isAutoEntry && okxSameSideRow) {
         const ledgerPx = coerceFinite(ledgerPos.entryPrice);
-        const okxAvg = coerceFinite(okxRow.avgPx ?? okxRow.avg_px ?? okxRow.reference_entry_px);
+        const okxAvg = coerceFinite(okxSameSideRow.avgPx ?? okxSameSideRow.avg_px ?? okxSameSideRow.reference_entry_px);
         if (ledgerPx !== null && okxAvg !== null && ledgerPx > 0) {
             const diff = Math.abs(ledgerPx - okxAvg) / ledgerPx;
             if (diff > 0.05) {
@@ -431,12 +472,12 @@ function detectManualIntervention(
     }
 
     // 조건 6: OKX preview에 해당 심볼 행이 존재하면서 수량/avgPx가 다를 때
-    // sync_status가 ALIGNED여도 OKX 행 데이터가 실제 다른 경우 표시
-    if (okxRow && reasons.length === 0) {
+    // sync_status가 ALIGNED여도 OKX 행 데이터가 실제 다른 경우 표시 (same-side 기준)
+    if (okxSameSideRow && reasons.length === 0) {
         const ledgerPx = coerceFinite(ledgerPos.entryPrice);
-        const okxAvg = coerceFinite(okxRow.avgPx ?? okxRow.avg_px);
+        const okxAvg = coerceFinite(okxSameSideRow.avgPx ?? okxSameSideRow.avg_px);
         const ledgerSz2 = coerceFinite(ledgerPos.sizeContracts) ?? coerceFinite(ledgerPos.sizeUsd);
-        const okxSz2 = coerceFinite(okxRow.pos) ?? coerceFinite(okxRow.sz);
+        const okxSz2 = coerceFinite(okxSameSideRow.pos) ?? coerceFinite(okxSameSideRow.sz);
         if (ledgerPx !== null && okxAvg !== null && ledgerPx > 0) {
             const diff = Math.abs(ledgerPx - okxAvg) / ledgerPx;
             if (diff > 0.01) {
@@ -446,6 +487,12 @@ function detectManualIntervention(
         if (ledgerSz2 !== null && okxSz2 !== null && Math.abs(ledgerSz2 - okxSz2) / Math.max(Math.abs(ledgerSz2), 1) > 0.01) {
             reasons.push(`수량 불일치: 레저 ${ledgerSz2} / OKX ${okxSz2}`);
         }
+    }
+
+    // 조건 7: 방향 불일치 (okxSymbolRow는 있으나 okxSameSideRow가 없는 경우)
+    if (okxSymbolRows.length > 0 && !okxSameSideRow) {
+        const actualOkxSide = String(okxSymbolRows[0].side ?? okxSymbolRows[0].posSide ?? "").toLowerCase();
+        reasons.push(`방향 불일치 (OKX actual: ${actualOkxSide.toUpperCase()} / Engine: ${ledgerSide.toUpperCase()})`);
     }
 
     return { suspected: reasons.length > 0, reasons };
@@ -467,6 +514,22 @@ function buildPositionDisplaySlots(bundle: Bundle): PositionDisplaySlot[] {
     const syncStatus = typeof sync?.sync_status === "string" ? sync.sync_status : "";
 
     const { positions: activePositions } = getActivePositions(bundle);
+    const diagnosticPositions = getDiagnosticLedgerPositions(bundle);
+    
+    const positionMap = new Map<string, Record<string, any>>();
+    for (const p of candidatePositions) {
+        const sym = String(p.symbol || "");
+        const side = String(p.side || "long").toLowerCase();
+        positionMap.set(`${sym}:${side}`, p);
+    }
+    for (const p of diagnosticPositions) {
+        const sym = String(p.symbol || "");
+        const side = String(p.side || "long").toLowerCase();
+        if (!positionMap.has(`${sym}:${side}`)) {
+            positionMap.set(`${sym}:${side}`, p);
+        }
+    }
+    const candidatePositions = Array.from(positionMap.values());
 
     const reconcileBadge =
         syncStatus === "OKX_ONLY" ||
@@ -491,26 +554,43 @@ function buildPositionDisplaySlots(bundle: Bundle): PositionDisplaySlot[] {
         const side = String(p.side || "long").toLowerCase();
         seenKeys.add(positionRowKey(sym, side));
 
-        const { suspected, reasons } = detectManualIntervention(p, sync as Record<string, unknown> | null, false);
+        const trueExternalManual = hasExplicitIndependentManualEvidenceForDisplay(p);
+        const { suspected, reasons } = detectPositionSyncMismatch(p, sync as Record<string, unknown> | null, false);
 
         // OKX preview 행 매칭: symbol + side/posSide 기준
-        // OKX는 심볼을 "BTCUSDT" 또는 "BTC-USDT-SWAP" 형식으로 줄 수 있으므로 includes로 비교
         const symCore = sym.replace(/-USDT-SWAP$/i, "").replace(/USDT$/i, "").toUpperCase();
-        const okxActual = preview.find((o) => {
+        
+        const okxSymbolRows = preview.filter((o) => {
             const oSym = String(o.symbol ?? "").replace(/-USDT-SWAP$/i, "").replace(/USDT$/i, "").toUpperCase();
-            if (oSym !== symCore) return false;
+            return oSym === symCore;
+        });
+
+        // same-side 우선 매칭, 없으면 다른 side라도 반환하여 okxActual에 바인딩
+        const okxActual = okxSymbolRows.find((o) => {
             const oSide = String(o.side ?? o.posSide ?? "net").toLowerCase();
-            // "net" 는 단일 포지션 모드이므로 side 무관하게 매칭
             if (oSide === "net") return true;
             return oSide === side;
-        }) ?? null;
+        }) ?? okxSymbolRows[0] ?? null;
+
+        const sideMismatch = okxActual && String(okxActual.side ?? okxActual.posSide ?? "").toLowerCase() !== "net" && String(okxActual.side ?? okxActual.posSide ?? "").toLowerCase() !== side;
+        
+        let diagnosticBadge = reconcileBadge;
+        if (sideMismatch) {
+            diagnosticBadge = `포지션 동기화 불일치 · OKX actual 기준 감시 중`;
+        } else if (trueExternalManual) {
+            diagnosticBadge = `외부 수동 개입 확인`;
+        } else if (suspected) {
+            diagnosticBadge = `포지션 동기화 불일치 · ${reasons[0] ?? syncStatus}`;
+        }
 
         slots.push({
             pos: p,
-            exchangeDiagnosticBadge: suspected ? `수동 개입 감지 · ${reasons[0] ?? syncStatus}` : reconcileBadge,
+            exchangeDiagnosticBadge: diagnosticBadge,
             exchangeStatusHeadline: null,
-            manualInterventionSuspected: suspected,
-            manualInterventionReasons: reasons,
+            manualInterventionSuspected: trueExternalManual,
+            manualInterventionReasons: trueExternalManual ? [String(p.reconcileState || p.ledgerSyncStatus || "EXTERNAL_MANUAL")] : [],
+            syncMismatchDetected: suspected,
+            syncMismatchReasons: reasons,
             okxActual
         });
     }
@@ -547,17 +627,26 @@ function buildPositionDisplaySlots(bundle: Bundle): PositionDisplaySlot[] {
             _orb_exchange_only: true,
             ...(contracts !== null ? { _orb_contracts: contracts } : {})
         };
-        const { suspected: fbSuspected, reasons: fbReasons } = detectManualIntervention(
+        const fbTrueExternalManual = hasExplicitIndependentManualEvidenceForDisplay(fallbackPos);
+        const { suspected: fbSuspected, reasons: fbReasons } = detectPositionSyncMismatch(
             fallbackPos, sync as Record<string, unknown> | null, true
         );
+        
+        let fbDiagnosticBadge = syncStatus === "OKX_ONLY" ? "Paper 원장 미동기화 · OKX_ONLY" : `실거래소 포지션 · ${syncStatus || "ALIGNED"}`;
+        if (fbTrueExternalManual) {
+            fbDiagnosticBadge = `외부 수동 개입 확인`;
+        } else if (fbSuspected) {
+            fbDiagnosticBadge = `포지션 동기화 불일치 · ${fbReasons[0] ?? syncStatus}`;
+        }
+        
         slots.push({
             pos: fallbackPos,
-            exchangeDiagnosticBadge: fbSuspected
-                ? `수동 개입 감지 · ${fbReasons[0] ?? syncStatus}`
-                : syncStatus === "OKX_ONLY" ? "Paper 원장 미동기화 · OKX_ONLY" : `실거래소 포지션 · ${syncStatus || "ALIGNED"}`,
-            exchangeStatusHeadline: fbSuspected ? "수동 개입 감지 / 장부 정합성 확인 필요" : "실거래소 포지션 보유 중",
-            manualInterventionSuspected: fbSuspected,
-            manualInterventionReasons: fbReasons,
+            exchangeDiagnosticBadge: fbDiagnosticBadge,
+            exchangeStatusHeadline: fbTrueExternalManual ? "외부 수동 개입 확인" : fbSuspected ? "장부 정합성 확인 필요" : "실거래소 포지션 보유 중",
+            manualInterventionSuspected: fbTrueExternalManual,
+            manualInterventionReasons: fbTrueExternalManual ? [String(fallbackPos.reconcileState || fallbackPos.ledgerSyncStatus || "EXTERNAL_MANUAL")] : [],
+            syncMismatchDetected: fbSuspected,
+            syncMismatchReasons: fbReasons,
             okxActual: row as Record<string, unknown>
         });
     }
@@ -804,6 +893,7 @@ function PositionMoneyCard({
     exchangeDiagnosticBadge,
     exchangeStatusHeadline,
     manualInterventionSuspected = false,
+    syncMismatchDetected = false,
     okxActual = null,
     conflictInfo = null
 }: {
@@ -814,6 +904,7 @@ function PositionMoneyCard({
     exchangeDiagnosticBadge?: string | null;
     exchangeStatusHeadline?: string | null;
     manualInterventionSuspected?: boolean;
+    syncMismatchDetected?: boolean;
     okxActual?: Record<string, unknown> | null;
     conflictInfo?: {
         okxSide: string;
@@ -921,7 +1012,9 @@ function PositionMoneyCard({
         containerBorderCls = "border-rose-300 bg-rose-50/10 shadow-rose-50/50";
     } else if (conflictSeverity === "warning") {
         containerBorderCls = "border-amber-300 bg-amber-50/10 shadow-amber-50/50";
-    } else if (exchangeDiagnosticBadge || manualInterventionSuspected) {
+    } else if (manualInterventionSuspected) {
+        containerBorderCls = "border-rose-300 bg-rose-50/10 shadow-rose-50/50";
+    } else if (exchangeDiagnosticBadge || syncMismatchDetected) {
         containerBorderCls = "border-amber-200 bg-amber-50/10";
     }
 
@@ -977,7 +1070,7 @@ function PositionMoneyCard({
                 </div>
             </div>
 
-            {manualInterventionSuspected ? (
+            {manualInterventionSuspected || syncMismatchDetected ? (
                 okxActual ? (() => {
                     const okxAvgPx = coerceFinite(okxActual.avgPx) ?? coerceFinite(okxActual.avg_px);
                     const okxMark = coerceFinite(okxActual.markPx) ?? coerceFinite(okxActual.mark_px) ?? mark;
@@ -991,9 +1084,9 @@ function PositionMoneyCard({
                     const liqPx = coerceFinite(okxActual.liqPx);
                     return (
                         <>
-                            <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] font-bold text-amber-900">
-                                ⚠ 수동 개입 감지 / OKX 실제 기준 — 아래 값은 OKX 실제 포지션 기준이며 자동매매 성과로 확정하지 않습니다.
-                                {isEstimated && <span className="ml-1 font-normal text-amber-700">손익은 가격 기반 추정값이며 OKX 공식 수치가 아닙니다.</span>}
+                            <div className={`mt-3 rounded-md border px-3 py-2 text-[11px] font-bold ${manualInterventionSuspected ? "border-rose-200 bg-rose-50 text-rose-900" : "border-amber-200 bg-amber-50 text-amber-900"}`}>
+                                {manualInterventionSuspected ? "⚠ 외부 수동 개입 확인" : "⚠ 포지션 동기화 불일치"} / OKX 실제 기준 — 아래 값은 OKX 실제 포지션 기준이며 자동매매 성과로 확정하지 않습니다.
+                                {isEstimated && <span className={`ml-1 font-normal ${manualInterventionSuspected ? "text-rose-700" : "text-amber-700"}`}>손익은 가격 기반 추정값이며 OKX 공식 수치가 아닙니다.</span>}
                             </div>
                             <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
                                 <MetricCell label="진입가 (OKX)" value={okxAvgPx !== null ? formatPrice(okxAvgPx) : "-"} />
@@ -1082,6 +1175,8 @@ function OpenPositionDetailCard({
     symbolDecisions,
     manualInterventionSuspected,
     manualInterventionReasons,
+    syncMismatchDetected,
+    syncMismatchReasons,
     okxActual
 }: {
     pos: Record<string, any>;
@@ -1089,6 +1184,8 @@ function OpenPositionDetailCard({
     symbolDecisions: Record<string, unknown> | null;
     manualInterventionSuspected: boolean;
     manualInterventionReasons: string[];
+    syncMismatchDetected: boolean;
+    syncMismatchReasons: string[];
     okxActual: Record<string, unknown> | null;
 }) {
     const sym = String(pos.symbol ?? "");
@@ -1179,40 +1276,52 @@ function OpenPositionDetailCard({
     const okxSource = okxActual ? String(okxActual.source ?? okxActual.mgnMode ?? "OKX") : "—";
 
     const borderClass = manualInterventionSuspected
-        ? "border-amber-200 bg-amber-50/20"
-        : "border-emerald-100 bg-emerald-50/30";
+        ? "border-rose-300 bg-rose-50/20"
+        : syncMismatchDetected
+            ? "border-amber-200 bg-amber-50/20"
+            : "border-emerald-100 bg-emerald-50/30";
     const headerClass = manualInterventionSuspected
-        ? "border-b border-amber-200 bg-amber-50/60 px-3 py-2"
-        : "border-b border-emerald-100 bg-emerald-50/60 px-3 py-2";
+        ? "border-b border-rose-300 bg-rose-50/60 px-3 py-2"
+        : syncMismatchDetected
+            ? "border-b border-amber-200 bg-amber-50/60 px-3 py-2"
+            : "border-b border-emerald-100 bg-emerald-50/60 px-3 py-2";
     const headerTextClass = manualInterventionSuspected
-        ? "text-[10px] font-black uppercase tracking-widest text-amber-700"
-        : "text-[10px] font-black uppercase tracking-widest text-emerald-700";
+        ? "text-[10px] font-black uppercase tracking-widest text-rose-700"
+        : syncMismatchDetected
+            ? "text-[10px] font-black uppercase tracking-widest text-amber-700"
+            : "text-[10px] font-black uppercase tracking-widest text-emerald-700";
+
+    const isAnyWarning = manualInterventionSuspected || syncMismatchDetected;
+    const warningReasons = manualInterventionSuspected ? manualInterventionReasons : syncMismatchReasons;
+    const warningTitle = manualInterventionSuspected ? "⚠️ 외부 수동 개입 확인" : "⚠️ 포지션 동기화 불일치";
 
     return (
         <div className={`mt-3 overflow-hidden rounded-lg border ${borderClass}`}>
             <div className={headerClass}>
                 <p className={headerTextClass}>
-                    {manualInterventionSuspected ? "⚠️ 수동 개입 감지 / 보유 포지션 상세" : "보유 포지션 상세"}
+                    {isAnyWarning ? `${warningTitle} / 보유 포지션 상세` : "보유 포지션 상세"}
                 </p>
             </div>
 
-            {manualInterventionSuspected && (
-                <div className="border-b border-amber-200 bg-amber-50 px-3 py-3 space-y-2">
-                    <p className="text-xs font-bold text-amber-900">
-                        ⚠ 수동 거래 또는 외부 체결 이후 자동 장부와 OKX 실제 포지션이 다를 수 있습니다. 이 손익은 자동매매 성과로 확정하지 않습니다.
+            {isAnyWarning && (
+                <div className={`border-b ${manualInterventionSuspected ? "border-rose-200 bg-rose-50" : "border-amber-200 bg-amber-50"} px-3 py-3 space-y-2`}>
+                    <p className={`text-xs font-bold ${manualInterventionSuspected ? "text-rose-900" : "text-amber-900"}`}>
+                        {manualInterventionSuspected 
+                            ? "⚠ 외부에서 수동으로 개입한 포지션입니다. 자동매매 성과로 확정하지 않습니다." 
+                            : "⚠ 자동 장부와 OKX 실제 포지션이 다릅니다. 이 손익은 자동매매 성과로 확정하지 않습니다."}
                     </p>
                     <ul className="space-y-0.5">
-                        {manualInterventionReasons.map((r, i) => (
-                            <li key={i} className="text-[11px] font-medium text-amber-800">· {r}</li>
+                        {warningReasons.map((r, i) => (
+                            <li key={i} className={`text-[11px] font-medium ${manualInterventionSuspected ? "text-rose-800" : "text-amber-800"}`}>· {r}</li>
                         ))}
                     </ul>
-                    <p className="text-[10px] font-semibold text-amber-700 border-t border-amber-200 pt-2">
+                    <p className={`text-[10px] font-semibold ${manualInterventionSuspected ? "text-rose-700 border-t border-rose-200" : "text-amber-700 border-t border-amber-200"} pt-2`}>
                         ⛔ 정합성 확인 전 {String(pos.symbol ?? "")} 신규 자동 진입 차단 필요 | 강제 청산 또는 history 확정 기록 생성 금지
                     </p>
                 </div>
             )}
 
-            {manualInterventionSuspected ? (
+            {isAnyWarning ? (
                 okxActual ? (() => {
                     const { pnl: estPnl, pct: estPct, isEstimated: isEst } = estimateOkxPnl(okxActual, okxMark);
                     const pnlLabel = isEst ? "(추정) 미실현 손익" : "미실현 손익 (OKX)";
@@ -1351,9 +1460,12 @@ function SymbolStatusCard({
     const activeSlot = positionSlots.find((s) => String(s.pos.symbol) === sym);
     const activeRow = bundle.symbolRows?.find((r) => r.symbol === sym);
     const isManualIntervention = activeSlot?.manualInterventionSuspected === true;
-    const effectiveStateLabel = isManualIntervention ? "수동 개입 감지" : stateLabel;
+    const isSyncMismatch = activeSlot?.syncMismatchDetected === true;
+    const effectiveStateLabel = isManualIntervention ? "외부 수동 개입 확인" : isSyncMismatch ? "포지션 동기화 불일치" : stateLabel;
 
     const badgeClass = isManualIntervention
+        ? "bg-rose-50 text-rose-700 border-rose-200"
+        : isSyncMismatch
         ? "bg-amber-50 text-amber-700 border-amber-200"
         : effectiveStateLabel === "포지션 보유 중"
             ? "bg-emerald-50 text-emerald-600 border-emerald-100"
@@ -1395,7 +1507,9 @@ function SymbolStatusCard({
             <div className="mt-3 space-y-2">
                 <p className="text-xs text-slate-600">
                     {isManualIntervention
-                        ? "수동 개입 감지 / 장부 정합성 확인 필요"
+                        ? "외부 수동 개입 확인 / 장부 정합성 확인 필요"
+                        : isSyncMismatch
+                        ? "포지션 동기화 불일치 / 장부 정합성 확인 필요"
                         : rep.reason}
                 </p>
                 {activeSlot ? (
@@ -1405,6 +1519,8 @@ function SymbolStatusCard({
                         symbolDecisions={symbolDecisions}
                         manualInterventionSuspected={activeSlot.manualInterventionSuspected}
                         manualInterventionReasons={activeSlot.manualInterventionReasons}
+                        syncMismatchDetected={activeSlot.syncMismatchDetected}
+                        syncMismatchReasons={activeSlot.syncMismatchReasons}
                         okxActual={activeSlot.okxActual}
                     />
                 ) : (
@@ -2248,6 +2364,7 @@ export default function FuturesPaperClientPage({ initialBundle }: { initialBundl
                                                 exchangeDiagnosticBadge={slot.exchangeDiagnosticBadge}
                                                 exchangeStatusHeadline={slot.exchangeStatusHeadline}
                                                 manualInterventionSuspected={slot.manualInterventionSuspected}
+                                                syncMismatchDetected={slot.syncMismatchDetected}
                                                 okxActual={slot.okxActual}
                                                 conflictInfo={conflictInfo}
                                             />
