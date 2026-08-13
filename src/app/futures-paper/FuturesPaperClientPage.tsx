@@ -517,7 +517,7 @@ function buildPositionDisplaySlots(bundle: Bundle): PositionDisplaySlot[] {
     const diagnosticPositions = getDiagnosticLedgerPositions(bundle);
     
     const positionMap = new Map<string, Record<string, any>>();
-    for (const p of candidatePositions) {
+    for (const p of activePositions) {
         const sym = String(p.symbol || "");
         const side = String(p.side || "long").toLowerCase();
         positionMap.set(`${sym}:${side}`, p);
