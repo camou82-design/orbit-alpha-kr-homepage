@@ -41,7 +41,17 @@ import {
     formatBoolKo,
     formatEmpty,
     formatRelativeAgeKo,
-    NO_ENTRY_AUDIT_STALE_MS
+    NO_ENTRY_AUDIT_STALE_MS,
+    pickExternalMarketContext,
+    formatExternalContextScore,
+    formatExternalContextMultiplier,
+    formatExternalReliabilityPct,
+    mapExternalMarketDirection,
+    formatExternalMomentumSourceLine,
+    formatEconomicEventSourceStatus,
+    formatCryptoNewsSourceStatus,
+    buildExternalMarketSummary,
+    externalMarketStatusBadges
 } from "@/lib/futuresPaperFormat";
 
 /** Types */
@@ -644,7 +654,7 @@ function buildPositionDisplaySlots(bundle: Bundle): PositionDisplaySlot[] {
             exchangeDiagnosticBadge: fbDiagnosticBadge,
             exchangeStatusHeadline: fbTrueExternalManual ? "외부 수동 개입 확인" : fbSuspected ? "장부 정합성 확인 필요" : "실거래소 포지션 보유 중",
             manualInterventionSuspected: fbTrueExternalManual,
-            manualInterventionReasons: fbTrueExternalManual ? [String(fallbackPos.reconcileState || fallbackPos.ledgerSyncStatus || "EXTERNAL_MANUAL")] : [],
+            manualInterventionReasons: fbTrueExternalManual ? [String((fallbackPos as Record<string, any>).reconcileState || (fallbackPos as Record<string, any>).ledgerSyncStatus || "EXTERNAL_MANUAL")] : [],
             syncMismatchDetected: fbSuspected,
             syncMismatchReasons: fbReasons,
             okxActual: row as Record<string, unknown>
@@ -2000,6 +2010,135 @@ function OperatorControlSection({
     );
 }
 
+function ExternalMarketContextSection({ bundle }: { bundle: Bundle }) {
+    const ctx = pickExternalMarketContext(bundle as Record<string, unknown>);
+    if (!ctx) {
+        return (
+            <section className="space-y-4">
+                <h2 className="text-xs font-bold uppercase tracking-widest text-slate-500">
+                    외부시장 맥락 (External Market Context)
+                </h2>
+                <div className="rounded-lg border border-slate-200 bg-white p-5 text-sm text-slate-500 shadow-sm">
+                    외부시장 맥락 데이터 없음 · engineState.external_market_context 가 아직 번들에 없습니다.
+                </div>
+            </section>
+        );
+    }
+
+    const score = ctx.external_context_score;
+    const reliability = ctx.external_signal_reliability;
+    const weight = ctx.available_signal_weight;
+    const dir = mapExternalMarketDirection(score, reliability, weight);
+    const dirClass =
+        dir.tone === "bull" ? "text-emerald-600" : dir.tone === "bear" ? "text-rose-600" : "text-slate-600";
+    const longMult =
+        typeof ctx.reliability_adjusted_long_preview_multiplier === "number" &&
+        Number.isFinite(ctx.reliability_adjusted_long_preview_multiplier) &&
+        reliability !== 0
+            ? ctx.reliability_adjusted_long_preview_multiplier
+            : ctx.long_preview_multiplier;
+    const shortMult =
+        typeof ctx.reliability_adjusted_short_preview_multiplier === "number" &&
+        Number.isFinite(ctx.reliability_adjusted_short_preview_multiplier) &&
+        reliability !== 0
+            ? ctx.reliability_adjusted_short_preview_multiplier
+            : ctx.short_preview_multiplier;
+    const updatedAt = typeof ctx.ts === "number" && Number.isFinite(ctx.ts) ? ctx.ts : null;
+    const ageMs = typeof ctx.snapshot_age_ms === "number" && Number.isFinite(ctx.snapshot_age_ms) ? ctx.snapshot_age_ms : null;
+    const badges = externalMarketStatusBadges(ctx);
+
+    const sourceRow = (label: string, key: string, signal: unknown) => (
+        <div className="flex flex-wrap items-baseline justify-between gap-2 border-t border-slate-100 py-2 first:border-t-0 first:pt-0">
+            <span className="text-xs font-medium text-slate-500">{label}</span>
+            <span className="font-mono text-xs font-semibold text-slate-800">
+                {formatExternalMomentumSourceLine(ctx, key, signal)}
+            </span>
+        </div>
+    );
+
+    return (
+        <section className="space-y-4">
+            <div>
+                <h2 className="text-xs font-bold uppercase tracking-widest text-slate-500">
+                    외부시장 맥락 (External Market Context)
+                </h2>
+                <p className="mt-1 text-[11px] text-slate-400">BTC/ETH 롱·숏 방향 우호도 · 엔진 shadow proof (읽기 전용)</p>
+            </div>
+            <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+                <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">
+                    <div>
+                        <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">외부시장 판단</p>
+                        <p className={`mt-1 text-base font-bold ${dirClass}`}>{dir.label}</p>
+                    </div>
+                    <div>
+                        <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">외부 점수</p>
+                        <p className="mt-1 font-mono text-base font-bold text-slate-900">{formatExternalContextScore(score)}</p>
+                    </div>
+                    <div>
+                        <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">신뢰도</p>
+                        <p className="mt-1 font-mono text-base font-bold text-slate-900">{formatExternalReliabilityPct(reliability)}</p>
+                    </div>
+                    <div>
+                        <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">롱 예상 배율</p>
+                        <p className="mt-1 font-mono text-base font-bold text-slate-900">{formatExternalContextMultiplier(longMult)}</p>
+                    </div>
+                    <div>
+                        <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">숏 예상 배율</p>
+                        <p className="mt-1 font-mono text-base font-bold text-slate-900">{formatExternalContextMultiplier(shortMult)}</p>
+                    </div>
+                </div>
+
+                <div className="mt-4 flex flex-wrap gap-2">
+                    {badges.map((b) => (
+                        <span
+                            key={b}
+                            className={`rounded-full border px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wide ${
+                                b === "관찰 전용"
+                                    ? "border-amber-200 bg-amber-50 text-amber-800"
+                                    : b === "실거래 영향 없음"
+                                      ? "border-slate-200 bg-slate-50 text-slate-600"
+                                      : b === "데이터 수집 비활성"
+                                        ? "border-rose-200 bg-rose-50 text-rose-700"
+                                        : "border-emerald-200 bg-emerald-50 text-emerald-700"
+                            }`}
+                        >
+                            {b}
+                        </span>
+                    ))}
+                </div>
+
+                <p className="mt-4 text-sm leading-relaxed text-slate-700">{buildExternalMarketSummary(ctx, dir)}</p>
+
+                <div className="mt-4 rounded-md border border-slate-100 bg-slate-50/80 px-4 py-3">
+                    {sourceRow("나스닥(NQ)", "nq", ctx.nq_signal)}
+                    {sourceRow("S&P500(ES)", "es", ctx.es_signal)}
+                    {sourceRow("달러지수(DXY)", "dxy", ctx.dxy_signal)}
+                    {sourceRow("미국 10년물 금리", "us10y", ctx.us10y_signal)}
+                    <div className="flex flex-wrap items-baseline justify-between gap-2 border-t border-slate-100 py-2">
+                        <span className="text-xs font-medium text-slate-500">경제 이벤트</span>
+                        <span className="text-xs font-semibold text-slate-800">{formatEconomicEventSourceStatus(ctx)}</span>
+                    </div>
+                    <div className="flex flex-wrap items-baseline justify-between gap-2 border-t border-slate-100 py-2">
+                        <span className="text-xs font-medium text-slate-500">크립토 뉴스</span>
+                        <span className="text-xs font-semibold text-slate-800">{formatCryptoNewsSourceStatus(ctx)}</span>
+                    </div>
+                </div>
+
+                <p className="mt-3 text-[10px] text-slate-400">
+                    갱신 {updatedAt !== null ? formatDateTimeKstNumeric(updatedAt) : "—"}
+                    {ageMs !== null ? ` · 스냅샷 ${Math.round(ageMs / 1000)}초 전` : ""}
+                    {" · 가용 가중치 "}
+                    {typeof weight === "number" && Number.isFinite(weight) ? weight.toFixed(2) : "—"}
+                    {" · raw 롱 "}
+                    {formatExternalContextMultiplier(ctx.raw_long_preview_multiplier)}
+                    {" / raw 숏 "}
+                    {formatExternalContextMultiplier(ctx.raw_short_preview_multiplier)}
+                </p>
+            </div>
+        </section>
+    );
+}
+
 export default function FuturesPaperClientPage({ initialBundle }: { initialBundle: Bundle }) {
     const [bundle, setBundle] = useState<Bundle>(initialBundle);
     const [err, setErr] = useState<string | null>(null);
@@ -2240,6 +2379,8 @@ export default function FuturesPaperClientPage({ initialBundle }: { initialBundl
                             isProcessing={isProcessingControl}
                         />
 
+                        <ExternalMarketContextSection bundle={bundle} />
+
                         {/* 2. 핵심 요약 */}
                         <section className="space-y-4">
                             <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
@@ -2304,10 +2445,10 @@ export default function FuturesPaperClientPage({ initialBundle }: { initialBundl
                                     </div>
                                 ) : (
                                     positionSlots.map((slot, i) => {
-                                        const sym = slot.pos.symbol;
+                                        const sym = String(slot.pos.symbol ?? "");
                                         const auditRow = pickNoEntryAuditRow(bundle as any, sym);
                                         const candidateDirection = auditRow ? formatSideCandidateEn(auditRow.trend_side_candidate) : null;
-                                        const htfBias = auditRow ? (auditRow.htf_1d_bias ?? auditRow.htf_4h_bias ?? auditRow.htf_1h_bias ?? null) : null;
+                                        const htfBias = auditRow ? (String(auditRow.htf_1d_bias ?? auditRow.htf_4h_bias ?? auditRow.htf_1h_bias ?? "") || null) : null;
                                         const nextAction = auditRow ? String(auditRow.expected_next_action ?? "") : null;
                                         const noEntryReason = auditRow ? String(auditRow.expected_missing_condition ?? "") : null;
                                         const okxSide = slot.okxActual 

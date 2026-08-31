@@ -628,3 +628,169 @@ export function computeLedgerPerformanceFromHistory(history: any[]) {
     tradeCount: trades.length
   };
 }
+
+/** External Market Context — read-only display helpers (engineState.external_market_context). */
+
+export type ExternalMarketContextPayload = Readonly<Record<string, unknown>>;
+
+export type ExternalMarketDirectionView = Readonly<{
+  label: string;
+  tone: "bull" | "bear" | "neutral";
+  key: string;
+  insufficient: boolean;
+}>;
+
+export function pickExternalMarketContext(
+  bundle: Record<string, unknown> | null | undefined
+): ExternalMarketContextPayload | null {
+  const es = bundle?.engineState;
+  if (!es || typeof es !== "object" || Array.isArray(es)) return null;
+  const ctx =
+    (es as Record<string, unknown>).external_market_context ??
+    (es as Record<string, unknown>).externalMarketContext ??
+    null;
+  return ctx && typeof ctx === "object" && !Array.isArray(ctx) ? (ctx as ExternalMarketContextPayload) : null;
+}
+
+export function formatExternalContextScore(n: unknown): string {
+  if (typeof n !== "number" || !Number.isFinite(n)) return "—";
+  const sign = n >= 0 ? "+" : "";
+  return `${sign}${n.toFixed(2)}`;
+}
+
+export function formatExternalContextMultiplier(n: unknown): string {
+  if (typeof n !== "number" || !Number.isFinite(n)) return "—";
+  return `${n.toFixed(2)}x`;
+}
+
+export function formatExternalReliabilityPct(n: unknown): string {
+  if (typeof n !== "number" || !Number.isFinite(n)) return "—";
+  const pct = n <= 1 ? n * 100 : n;
+  return `${Math.round(pct)}%`;
+}
+
+export function mapExternalMarketDirection(
+  score: unknown,
+  reliability: unknown,
+  weight: unknown
+): ExternalMarketDirectionView {
+  const insufficient =
+    reliability === 0 || (typeof weight === "number" && Number.isFinite(weight) && weight < 0.35);
+  if (insufficient) {
+    return { label: "외부 데이터 부족 / 중립", tone: "neutral", key: "insufficient", insufficient: true };
+  }
+  if (typeof score !== "number" || !Number.isFinite(score)) {
+    return { label: "—", tone: "neutral", key: "unknown", insufficient: false };
+  }
+  if (score >= 0.5) return { label: "롱 강한 우호", tone: "bull", key: "long_strong", insufficient: false };
+  if (score >= 0.15) return { label: "롱 우호", tone: "bull", key: "long", insufficient: false };
+  if (score > -0.15) return { label: "중립", tone: "neutral", key: "neutral", insufficient: false };
+  if (score > -0.5) return { label: "숏 우호", tone: "bear", key: "short", insufficient: false };
+  return { label: "숏 강한 우호", tone: "bear", key: "short_strong", insufficient: false };
+}
+
+function emcSourceUnavailable(ctx: ExternalMarketContextPayload, key: string): boolean {
+  const list = ctx.unavailable_sources;
+  if (!Array.isArray(list)) return false;
+  return list.some((s) => String(s).toLowerCase() === key.toLowerCase());
+}
+
+function formatMarketDirectionArrow(dir: unknown): string {
+  if (dir === "up") return "↑";
+  if (dir === "down") return "↓";
+  return "→";
+}
+
+export function formatExternalMomentumSourceLine(
+  ctx: ExternalMarketContextPayload,
+  key: string,
+  signal: unknown
+): string {
+  if (emcSourceUnavailable(ctx, key)) return "사용불가";
+  const disp =
+    ctx.source_display && typeof ctx.source_display === "object" && !Array.isArray(ctx.source_display)
+      ? (ctx.source_display as Record<string, unknown>)[key]
+      : null;
+  if (disp && typeof disp === "object" && !Array.isArray(disp)) {
+    const row = disp as Record<string, unknown>;
+    const mkt = formatMarketDirectionArrow(row.market_direction);
+    const btc =
+      typeof row.btc_impact === "number" && Number.isFinite(row.btc_impact)
+        ? formatExternalContextScore(row.btc_impact)
+        : "—";
+    return `시장 ${mkt} / BTC 영향 ${btc}`;
+  }
+  if (typeof signal !== "number" || !Number.isFinite(signal)) return "—";
+  const invert = key === "dxy" || key === "us10y";
+  const mkt = formatMarketDirectionArrow(signal > 0.05 ? "up" : signal < -0.05 ? "down" : "flat");
+  const btcVal = invert ? -signal : signal;
+  return `시장 ${mkt} / BTC 영향 ${formatExternalContextScore(btcVal)}`;
+}
+
+export function formatEconomicEventSourceStatus(ctx: ExternalMarketContextPayload): string {
+  const raw = ctx.economic_event_source_status;
+  if (raw === "live") return "정상";
+  if (raw === "cached") return "캐시";
+  if (emcSourceUnavailable(ctx, "economicEvent") || emcSourceUnavailable(ctx, "economic_event")) {
+    return "사용불가";
+  }
+  return "사용불가";
+}
+
+export function formatCryptoNewsSourceStatus(ctx: ExternalMarketContextPayload): string {
+  if (emcSourceUnavailable(ctx, "news")) return "사용불가";
+  const err =
+    ctx.last_fetch_errors && typeof ctx.last_fetch_errors === "object" && !Array.isArray(ctx.last_fetch_errors)
+      ? (ctx.last_fetch_errors as Record<string, unknown>).news
+      : null;
+  if (typeof err === "string" && err.trim()) return "사용불가";
+  return "정상";
+}
+
+export function buildExternalMarketSummary(
+  ctx: ExternalMarketContextPayload,
+  dir: ExternalMarketDirectionView
+): string {
+  if (ctx.external_market_context_fetch_enabled !== true) {
+    return "외부시장 데이터 수집이 비활성 상태입니다. 엔진 설정(EXTERNAL_MARKET_CONTEXT_FETCH_ENABLED) 확인이 필요합니다.";
+  }
+  if (dir.insufficient) {
+    return "외부 데이터가 부족해 방향 판단을 중립으로 처리하고 있습니다.";
+  }
+  const shadowSuffix =
+    ctx.external_market_context_shadow_mode !== false ||
+    ctx.external_market_context_enabled !== true ||
+    ctx.trading_impact === "none" ||
+    ctx.external_context_applied !== true
+      ? " 아직 관찰 전용이라 실제 주문에는 반영되지 않습니다."
+      : "";
+
+  switch (dir.key) {
+    case "long":
+      return `현재 외부시장 환경은 롱 포지션에 다소 우호적입니다.${shadowSuffix}`;
+    case "long_strong":
+      return `현재 외부시장 환경은 롱 포지션에 강하게 우호적입니다.${shadowSuffix}`;
+    case "short":
+      return `현재 외부시장 환경은 숏 포지션에 다소 우호적입니다.${shadowSuffix}`;
+    case "short_strong":
+      return `현재 외부시장 환경은 숏 포지션에 강하게 우호적입니다.${shadowSuffix}`;
+    case "neutral":
+      return "현재 외부시장 환경은 롱·숏 어느 한쪽에도 뚜렷하게 우호적이지 않습니다.";
+    default:
+      return "현재 외부시장 환경을 표시할 수 없습니다.";
+  }
+}
+
+export function externalMarketStatusBadges(ctx: ExternalMarketContextPayload): string[] {
+  const fetchOn = ctx.external_market_context_fetch_enabled === true;
+  const enabled = ctx.external_market_context_enabled === true;
+  const shadow = ctx.external_market_context_shadow_mode !== false;
+  const applied = ctx.external_context_applied === true;
+  const impactNone = ctx.trading_impact === "none" || ctx.trading_impact === "unknown";
+  const badges: string[] = [];
+  if (!fetchOn) badges.push("데이터 수집 비활성");
+  if (fetchOn && (!enabled || shadow)) badges.push("관찰 전용");
+  if (!applied || impactNone || shadow || !enabled) badges.push("실거래 영향 없음");
+  else badges.push("실거래 사이징 반영 중");
+  return badges;
+}
