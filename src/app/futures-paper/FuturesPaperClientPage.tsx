@@ -2010,6 +2010,170 @@ function OperatorControlSection({
     );
 }
 
+
+function LiveLeverageControlSection({
+    bundle,
+    onAction,
+    isProcessing
+}: {
+    bundle: Bundle;
+    onAction: (action: string, params?: any) => Promise<void>;
+    isProcessing: boolean;
+}) {
+    const tradeControl =
+        (bundle as any).tradeControl ??
+        (bundle.dashboard && typeof bundle.dashboard === "object"
+            ? (bundle.dashboard as any).tradeControl
+            : null) ??
+        (bundle.engineState ?? null);
+
+    const rawLev =
+        tradeControl?.selectedLeverageBySymbol ??
+        (bundle as any).selectedLeverageBySymbol ??
+        tradeControl?.selected_leverage_by_symbol ??
+        {};
+
+    const validLev = (v: unknown): 10 | 25 | 50 | 100 => {
+        const n = Number(v);
+        return n === 10 || n === 25 || n === 50 || n === 100 ? n : 10;
+    };
+
+    const selectedBySym: Record<string, 10 | 25 | 50 | 100> = {
+        BTCUSDT: validLev(rawLev.BTCUSDT),
+        ETHUSDT: validLev(rawLev.ETHUSDT)
+    };
+
+    const sync = (bundle as any).ledger_okx_position_sync ?? (bundle as any).sync;
+    const okxPositionsPreview = Array.isArray(sync?.okx_positions_preview) ? sync.okx_positions_preview : [];
+    const openPositions = Array.isArray((bundle as any).positionsOpenAll)
+        ? (bundle as any).positionsOpenAll
+        : Array.isArray((bundle.dashboard as any)?.positions)
+        ? (bundle.dashboard as any).positions
+        : [];
+
+    const marginLines = Array.isArray((bundle.engineState as any)?.position_margin_lines)
+        ? (bundle.engineState as any).position_margin_lines
+        : [];
+
+    const symbols = ["BTCUSDT", "ETHUSDT"] as const;
+
+    return (
+        <section className="space-y-4">
+            <div className="flex items-center justify-between">
+                <h2 className="text-xs font-bold uppercase tracking-widest text-slate-500">
+                    신규 진입 레버리지 (Live Leverage Authority)
+                </h2>
+                <span className="text-[11px] font-medium text-slate-400">
+                    독립 설정 · 적용: 다음 신규 진입부터 · 노셔널 확대 없음
+                </span>
+            </div>
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                {symbols.map((sym) => {
+                    const selected = selectedBySym[sym] ?? 10;
+                    const okxRow = okxPositionsPreview.find((r: any) => r && r.symbol === sym);
+                    const openPos = openPositions.find((p: any) => p && String(p.symbol).toUpperCase() === sym);
+                    const marginLine = marginLines.find((m: any) => m && m.symbol === sym);
+
+                    const hasPos = Boolean(
+                        (openPos && (openPos.sizeUsd ?? openPos.size ?? 0) !== 0) ||
+                        (okxRow && Number(okxRow.size ?? okxRow.contracts ?? 0) !== 0) ||
+                        (marginLine && (marginLine.notional_usdt ?? 0) > 0)
+                    );
+
+                    const confirmedLev =
+                        typeof okxRow?.leverage === "number"
+                            ? okxRow.leverage
+                            : typeof openPos?.leverage === "number"
+                            ? openPos.leverage
+                            : typeof marginLine?.applied_leverage === "number"
+                            ? marginLine.applied_leverage
+                            : 10;
+
+                    const rawNotional =
+                        typeof marginLine?.notional_usdt === "number" && marginLine.notional_usdt > 0
+                            ? marginLine.notional_usdt
+                            : typeof (bundle.engineState as any)?.initial_notional_cap_usdt === "number"
+                            ? (bundle.engineState as any).initial_notional_cap_usdt
+                            : null;
+
+                    const notionalDisplay =
+                        rawNotional != null && Number.isFinite(rawNotional)
+                            ? `~${Math.round(rawNotional).toLocaleString()} USDT`
+                            : "N/A";
+
+                    const estimatedMarginDisplay =
+                        rawNotional != null && Number.isFinite(rawNotional) && selected > 0
+                            ? `~${(rawNotional / selected).toFixed(2)} USDT`
+                            : "N/A";
+
+                    return (
+                        <div key={sym} className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm space-y-4">
+                            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                                <div className="flex items-center gap-2">
+                                    <span className="text-sm font-bold text-slate-800">{sym}</span>
+                                    <span className="rounded bg-sky-50 px-2 py-0.5 text-[10px] font-bold text-sky-700 border border-sky-100">
+                                        다음 신규 진입부터 적용
+                                    </span>
+                                </div>
+                                <span className="text-xs text-slate-400">
+                                    현재 포지션: {hasPos ? "보유 중" : "대기(flat)"}
+                                </span>
+                            </div>
+
+                            <div>
+                                <p className="mb-2 text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                                    신규 진입 레버리지 선택
+                                </p>
+                                <div className="grid grid-cols-4 gap-2">
+                                    {([10, 25, 50, 100] as const).map((lev) => {
+                                        const isActive = selected === lev;
+                                        return (
+                                            <button
+                                                key={lev}
+                                                type="button"
+                                                disabled={isProcessing}
+                                                onClick={() => onAction("SET_LEVERAGE", { symbol: sym, leverage: lev })}
+                                                className={`rounded py-2 text-xs font-bold transition-all ${
+                                                    isActive
+                                                        ? "bg-sky-600 text-white shadow-md shadow-sky-600/20 ring-2 ring-sky-600 ring-offset-1"
+                                                        : "border border-slate-200 bg-slate-50 text-slate-600 hover:bg-slate-100 hover:text-slate-800"
+                                                } ${isProcessing ? "opacity-60 cursor-not-allowed" : ""}`}
+                                            >
+                                                {lev}x
+                                            </button>
+                                        );
+                                    })}
+                                </div>
+                            </div>
+
+                            <div className="grid grid-cols-2 gap-3 rounded bg-slate-50 p-3 text-xs">
+                                <div>
+                                    <span className="text-slate-400 block text-[10px] uppercase tracking-wider">선택값</span>
+                                    <span className="font-bold text-slate-800">{selected}x</span>
+                                </div>
+                                <div>
+                                    <span className="text-slate-400 block text-[10px] uppercase tracking-wider">OKX 확인값</span>
+                                    <span className="font-bold text-slate-800">
+                                        {confirmedLev}x {hasPos ? "(보유 중)" : "(flat)"}
+                                    </span>
+                                </div>
+                                <div>
+                                    <span className="text-slate-400 block text-[10px] uppercase tracking-wider">주문 노셔널</span>
+                                    <span className="font-semibold text-slate-700">{notionalDisplay}</span>
+                                </div>
+                                <div>
+                                    <span className="text-slate-400 block text-[10px] uppercase tracking-wider">예상 필요 마진</span>
+                                    <span className="font-semibold text-slate-700">{estimatedMarginDisplay}</span>
+                                </div>
+                            </div>
+                        </div>
+                    );
+                })}
+            </div>
+        </section>
+    );
+}
+
 function ExternalMarketContextSection({ bundle }: { bundle: Bundle }) {
     const ctx = pickExternalMarketContext(bundle as Record<string, unknown>);
     if (!ctx) {

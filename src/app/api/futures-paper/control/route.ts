@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+﻿import { NextResponse } from "next/server";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -58,27 +58,63 @@ export async function GET() {
 
 /**
  * POST /api/futures-paper/control
- * Accepts: { action: "SET_TRADE", enabled: boolean }
- * Proxies to Lightsail API with serverTradeEnabled payload only.
+ * Accepts:
+ *  - { action: "SET_TRADE", enabled: boolean }
+ *  - { action: "SET_LEVERAGE", symbol: "BTCUSDT" | "ETHUSDT", leverage: 10 | 25 | 50 | 100 }
+ * Proxies to Lightsail API while preserving existing control state.
  */
 export async function POST(req: Request) {
   try {
     const cfg = readServerConfig();
     if ("error" in cfg) return cfg.error;
 
-    const body = (await req.json()) as { action?: unknown; enabled?: unknown };
-    if (body.action !== "SET_TRADE") {
-      return NextResponse.json({ error: "Unsupported action. Only SET_TRADE is allowed." }, { status: 400 });
-    }
-    if (typeof body.enabled !== "boolean") {
-      return NextResponse.json({ error: "enabled must be a boolean." }, { status: 400 });
-    }
-
-    const remoteBody = {
-      serverTradeEnabled: body.enabled,
-      updatedBy: "homepage",
-      reason: body.enabled ? "homepage_enable" : "homepage_disable"
+    const body = (await req.json()) as {
+      action?: unknown;
+      enabled?: unknown;
+      symbol?: unknown;
+      leverage?: unknown;
     };
+
+    let remoteBody: Record<string, unknown>;
+
+    if (body.action === "SET_TRADE") {
+      if (typeof body.enabled !== "boolean") {
+        return NextResponse.json({ error: "enabled must be a boolean." }, { status: 400 });
+      }
+      remoteBody = {
+        serverTradeEnabled: body.enabled,
+        updatedBy: "homepage",
+        reason: body.enabled ? "homepage_enable" : "homepage_disable"
+      };
+    } else if (body.action === "SET_LEVERAGE") {
+      const allowed = [10, 25, 50, 100];
+      const lev = Number(body.leverage);
+      if (!allowed.includes(lev)) {
+        return NextResponse.json(
+          { error: "leverage must be one of [10, 25, 50, 100]." },
+          { status: 400 }
+        );
+      }
+      const sym = String(body.symbol);
+      if (sym !== "BTCUSDT" && sym !== "ETHUSDT") {
+        return NextResponse.json(
+          { error: "symbol must be BTCUSDT or ETHUSDT." },
+          { status: 400 }
+        );
+      }
+      remoteBody = {
+        selectedLeverageBySymbol: {
+          [sym]: lev
+        },
+        updatedBy: "homepage",
+        reason: `homepage_set_${sym}_leverage_${lev}x`
+      };
+    } else {
+      return NextResponse.json(
+        { error: "Unsupported action. Only SET_TRADE or SET_LEVERAGE is allowed." },
+        { status: 400 }
+      );
+    }
 
     const res = await fetch(cfg.remoteUrl, {
       method: "POST",
