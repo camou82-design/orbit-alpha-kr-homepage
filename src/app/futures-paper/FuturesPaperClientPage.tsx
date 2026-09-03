@@ -2543,6 +2543,12 @@ export default function FuturesPaperClientPage({ initialBundle }: { initialBundl
                             isProcessing={isProcessingControl}
                         />
 
+                        <LiveLeverageControlSection
+                            bundle={bundle}
+                            onAction={handleControlAction}
+                            isProcessing={isProcessingControl}
+                        />
+
                         <ExternalMarketContextSection bundle={bundle} />
 
                         {/* 2. 핵심 요약 */}
