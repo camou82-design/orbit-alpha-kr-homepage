@@ -185,6 +185,18 @@ function normalizeOpenPos(pos: Record<string, unknown>): NormPos | null {
     };
 }
 
+function getTradeNetPnl(t: unknown): number {
+    if (!t || typeof t !== "object") return 0;
+    const rec = t as Record<string, unknown>;
+    if (typeof rec.pnlUsdNet === "number" && Number.isFinite(rec.pnlUsdNet)) return rec.pnlUsdNet;
+    if (typeof rec.pnlNet === "number" && Number.isFinite(rec.pnlNet)) return rec.pnlNet;
+    const pnlUsd = Number(rec.pnlUsdNet);
+    if (Number.isFinite(pnlUsd)) return pnlUsd;
+    const pnlN = Number(rec.pnlNet);
+    if (Number.isFinite(pnlN)) return pnlN;
+    return 0;
+}
+
 function closedTradeMarginUsd(t: Record<string, unknown>): number | null {
     const m = coerceFinite(pick(t, ["marginUsd", "margin_usd"]));
     if (m !== null && m > 0) return m;
@@ -1757,10 +1769,18 @@ function RecentPerformanceSection({
     history: any[];
 }) {
     const now = Date.now();
-    const last24hTrades = history.filter(t => t.closedAt && (now - t.closedAt) < 24 * 60 * 60 * 1000);
-    const pnl24h = last24hTrades.length > 0 ? last24hTrades.reduce((acc, t) => acc + (t.pnlUsdNet || 0), 0) : null;
+    const last24hTrades = history.filter(t => {
+        const closed = typeof t?.closedAt === "number" ? t.closedAt : Number(t?.closedAt);
+        return Number.isFinite(closed) && (now - closed) < 24 * 60 * 60 * 1000;
+    });
+    const pnl24h = last24hTrades.length > 0 ? last24hTrades.reduce((acc, t) => acc + getTradeNetPnl(t), 0) : null;
 
-    const last5 = [...history].reverse().slice(0, 5);
+    const sortedHistory = [...history].sort((a, b) => {
+        const aTime = typeof a?.closedAt === "number" ? a.closedAt : (Number(a?.closedAt) || 0);
+        const bTime = typeof b?.closedAt === "number" ? b.closedAt : (Number(b?.closedAt) || 0);
+        return bTime - aTime;
+    });
+    const last5 = sortedHistory.slice(0, 5);
     const w7 = perf?.last7d ?? null;
     const w30 = perf?.last30d ?? null;
 
@@ -1799,23 +1819,25 @@ function RecentPerformanceSection({
                                     </td>
                                 </tr>
                             ) : (
-                                last5.map((t, i) => (
-                                    <tr key={i} className="hover:bg-slate-50 transition-colors">
-                                        <td className="px-5 py-3 font-mono font-bold text-slate-700 notranslate" translate="no">{t.symbol}</td>
-                                        <td className="px-5 py-3">
-                                            <span className={`rounded px-1.5 py-0.5 text-[10px] font-bold ${t.side === "short" ? "bg-rose-50 text-rose-600 border border-rose-100" : "bg-emerald-50 text-emerald-600 border border-emerald-100"}`}>
-                                                {t.side === "short" ? "Short" : "Long"}
-                                            </span>
-                                        </td>
-                                        <td className="px-5 py-3 font-mono text-slate-500">{formatPrice(t.entryPrice)}</td>
-                                        <td className={`px-5 py-3 font-mono font-bold ${(t.pnlUsdNet || 0) >= 0 ? "text-emerald-600" : "text-rose-600"}`}>
-                                            {toSignedMainKrwSubUsd(t.pnlUsdNet || 0, USDKRW_RATE).krw}
-                                        </td>
-                                        <td className={`px-5 py-3 font-mono font-bold ${(t.pnlUsdNet || 0) >= 0 ? "text-emerald-600" : "text-rose-600"}`}>
-                                            {typeof t.realizedPnlPct === "number" && Number.isFinite(t.realizedPnlPct)
-                                                ? formatPercent(t.realizedPnlPct)
-                                                : formatPctOnMargin(t.pnlUsdNet ?? null, closedTradeMarginUsd(t as Record<string, unknown>))}
-                                        </td>
+                                last5.map((t, i) => {
+                                    const netPnl = getTradeNetPnl(t);
+                                    return (
+                                        <tr key={i} className="hover:bg-slate-50 transition-colors">
+                                            <td className="px-5 py-3 font-mono font-bold text-slate-700 notranslate" translate="no">{t.symbol}</td>
+                                            <td className="px-5 py-3">
+                                                <span className={`rounded px-1.5 py-0.5 text-[10px] font-bold ${t.side === "short" ? "bg-rose-50 text-rose-600 border border-rose-100" : "bg-emerald-50 text-emerald-600 border border-emerald-100"}`}>
+                                                    {t.side === "short" ? "Short" : "Long"}
+                                                </span>
+                                            </td>
+                                            <td className="px-5 py-3 font-mono text-slate-500">{formatPrice(t.entryPrice)}</td>
+                                            <td className={`px-5 py-3 font-mono font-bold ${netPnl >= 0 ? "text-emerald-600" : "text-rose-600"}`}>
+                                                {toSignedMainKrwSubUsd(netPnl, USDKRW_RATE).krw}
+                                            </td>
+                                            <td className={`px-5 py-3 font-mono font-bold ${netPnl >= 0 ? "text-emerald-600" : "text-rose-600"}`}>
+                                                {typeof t.realizedPnlPct === "number" && Number.isFinite(t.realizedPnlPct)
+                                                    ? formatPercent(t.realizedPnlPct)
+                                                    : formatPctOnMargin(netPnl, closedTradeMarginUsd(t as Record<string, unknown>))}
+                                            </td>
                                         <td className="px-5 py-3">
                                             {(() => {
                                                 const { label } = formatExitReason(t.exitType || t.exitReason);
@@ -1828,7 +1850,8 @@ function RecentPerformanceSection({
                                         </td>
                                         <td className="px-5 py-3 text-right text-[10px] text-slate-400">{formatDateTimeKst(t.closedAt)}</td>
                                     </tr>
-                                ))
+                                    );
+                                })
                             )}
                         </tbody>
                     </table>
@@ -1840,7 +1863,8 @@ function RecentPerformanceSection({
 
 function LastClosedSummaryCard({ trade }: { trade: any }) {
     if (!trade) return null;
-    const pnlClass = (trade.pnlUsdNet ?? 0) >= 0 ? "text-emerald-600" : "text-rose-600";
+    const netPnl = getTradeNetPnl(trade);
+    const pnlClass = netPnl >= 0 ? "text-emerald-600" : "text-rose-600";
     const holdMin = trade.closedAt && trade.openedAt ? Math.floor((trade.closedAt - trade.openedAt) / 60000) : null;
 
     return (
@@ -1859,12 +1883,14 @@ function LastClosedSummaryCard({ trade }: { trade: any }) {
                         <div className="flex items-center gap-6">
                             <div className="text-right">
                                 <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">실현 손익</p>
-                                <p className={`mt-0.5 font-mono text-base font-bold ${pnlClass}`}>{toSignedMainKrwSubUsd(trade.pnlUsdNet || 0, USDKRW_RATE).krw}</p>
+                                <p className={`mt-0.5 font-mono text-base font-bold ${pnlClass}`}>{toSignedMainKrwSubUsd(netPnl, USDKRW_RATE).krw}</p>
                             </div>
                             <div className="text-right">
                                 <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">수익률</p>
                                 <p className={`mt-0.5 font-mono text-base font-bold ${pnlClass}`}>
-                                    {typeof trade.realizedPnlPct === "number" ? formatPercent(trade.realizedPnlPct) : "-"}
+                                    {typeof trade.realizedPnlPct === "number" && Number.isFinite(trade.realizedPnlPct)
+                                        ? formatPercent(trade.realizedPnlPct)
+                                        : formatPctOnMargin(netPnl, closedTradeMarginUsd(trade as Record<string, unknown>))}
                                 </p>
                             </div>
                         </div>
@@ -2363,7 +2389,12 @@ export default function FuturesPaperClientPage({ initialBundle }: { initialBundl
 
     const perf = bundle?.ledgerPerformance ?? null;
     const history = Array.isArray(bundle?.positionsHistory) ? bundle.positionsHistory : [];
-    const lastClosed = history.length > 0 ? history[history.length - 1] : null;
+    const sortedHistory = [...history].sort((a, b) => {
+        const aTime = typeof a?.closedAt === "number" ? a.closedAt : (Number(a?.closedAt) || 0);
+        const bTime = typeof b?.closedAt === "number" ? b.closedAt : (Number(b?.closedAt) || 0);
+        return bTime - aTime;
+    });
+    const lastClosed = sortedHistory.length > 0 ? sortedHistory[0] : null;
 
     const engine = bundle?.engineState ?? null;
     const curRegime = pick(engine, ["current_regime", "currentRegime", "regime"]);
@@ -2714,7 +2745,7 @@ export default function FuturesPaperClientPage({ initialBundle }: { initialBundl
                         <LastClosedSummaryCard trade={lastClosed} />
 
                         {/* 6. 최근 거래 현황 */}
-                        <RecentPerformanceSection perf={perf} history={history} />
+                        <RecentPerformanceSection perf={perf} history={sortedHistory} />
 
                         {/* 7. 상세 상태 접기 영역 */}
                         <details className="group mt-10 overflow-hidden rounded-lg border border-slate-200 bg-white">
