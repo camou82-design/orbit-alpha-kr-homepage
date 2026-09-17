@@ -197,6 +197,72 @@ function getTradeNetPnl(t: unknown): number {
     return 0;
 }
 
+function getTradeClosePrice(t: unknown): number | null {
+    if (!t || typeof t !== "object") return null;
+    const rec = t as Record<string, unknown>;
+    const candidates = [rec.closePrice, rec.exitPrice, rec.closePx, rec.avgClosePrice];
+    for (const c of candidates) {
+        if (typeof c === "number" && Number.isFinite(c) && c > 0) return c;
+        if (typeof c === "string" && c.trim() !== "") {
+            const num = Number(c);
+            if (Number.isFinite(num) && num > 0) return num;
+        }
+    }
+    return null;
+}
+
+function getTradeDisplayPct(t: unknown, netPnl: number): string {
+    if (!t || typeof t !== "object") return "-";
+    const rec = t as Record<string, unknown>;
+
+    if (netPnl === 0) return "0.00%";
+
+    const raw = rec.realizedPnlPct;
+    const rawNum = typeof raw === "number" && Number.isFinite(raw) ? raw : (typeof raw === "string" ? Number(raw) : NaN);
+
+    let pct: number | null = null;
+
+    // 1. realizedPnlPct가 finite이고 방향이 net PnL과 일치하면 그대로 사용
+    if (Number.isFinite(rawNum) && rawNum !== 0) {
+        const isSameSign = (netPnl > 0 && rawNum > 0) || (netPnl < 0 && rawNum < 0);
+        if (isSameSign) {
+            pct = Math.abs(rawNum) <= 1 ? rawNum * 100 : rawNum;
+        }
+    }
+
+    // 2. 부호가 모순되거나 값이 없으면 margin 기반 fallback
+    const margin = closedTradeMarginUsd(rec);
+    if (pct === null) {
+        if (margin !== null && margin > 0) {
+            pct = (netPnl / margin) * 100;
+        }
+    }
+
+    if (pct === null || !Number.isFinite(pct)) {
+        return "-";
+    }
+
+    const absVal = Math.abs(pct);
+    const formattedAbs = absVal.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+    // 3. -0% 방지: 반올림 후 0.00 인 경우 margin fallback 재시도 또는 0.00% 정규화
+    if (formattedAbs === "0.00" || absVal < 0.005) {
+        if (margin !== null && margin > 0) {
+            const marginPct = (netPnl / margin) * 100;
+            const marginAbs = Math.abs(marginPct);
+            const marginFormatted = marginAbs.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+            if (marginFormatted !== "0.00" && marginAbs >= 0.005) {
+                const sign = netPnl > 0 ? "+" : "-";
+                return sign + marginFormatted + "%";
+            }
+        }
+        return "0.00%";
+    }
+
+    const sign = netPnl > 0 ? "+" : "-";
+    return sign + formattedAbs + "%";
+}
+
 function closedTradeMarginUsd(t: Record<string, unknown>): number | null {
     const m = coerceFinite(pick(t, ["marginUsd", "margin_usd"]));
     if (m !== null && m > 0) return m;
@@ -1834,9 +1900,7 @@ function RecentPerformanceSection({
                                                 {toSignedMainKrwSubUsd(netPnl, USDKRW_RATE).krw}
                                             </td>
                                             <td className={`px-5 py-3 font-mono font-bold ${netPnl >= 0 ? "text-emerald-600" : "text-rose-600"}`}>
-                                                {typeof t.realizedPnlPct === "number" && Number.isFinite(t.realizedPnlPct)
-                                                    ? formatPercent(t.realizedPnlPct)
-                                                    : formatPctOnMargin(netPnl, closedTradeMarginUsd(t as Record<string, unknown>))}
+                                                {getTradeDisplayPct(t, netPnl)}
                                             </td>
                                         <td className="px-5 py-3">
                                             {(() => {
@@ -1888,9 +1952,7 @@ function LastClosedSummaryCard({ trade }: { trade: any }) {
                             <div className="text-right">
                                 <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">수익률</p>
                                 <p className={`mt-0.5 font-mono text-base font-bold ${pnlClass}`}>
-                                    {typeof trade.realizedPnlPct === "number" && Number.isFinite(trade.realizedPnlPct)
-                                        ? formatPercent(trade.realizedPnlPct)
-                                        : formatPctOnMargin(netPnl, closedTradeMarginUsd(trade as Record<string, unknown>))}
+                                    {getTradeDisplayPct(trade, netPnl)}
                                 </p>
                             </div>
                         </div>
@@ -1917,7 +1979,7 @@ function LastClosedSummaryCard({ trade }: { trade: any }) {
                         <div>
                             <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">진입/종료</p>
                             <p className="mt-0.5 font-mono text-xs text-slate-500">
-                                {formatPrice(trade.entryPrice)} → {formatPrice(trade.exitPrice)}
+                                {formatPrice(trade.entryPrice)} → {formatPrice(getTradeClosePrice(trade))}
                             </p>
                         </div>
                     </div>
