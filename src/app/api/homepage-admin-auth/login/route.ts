@@ -1,7 +1,5 @@
 import { NextResponse } from "next/server";
-import { cookies } from "next/headers";
-
-const COOKIE_NAME = "homepage_admin_auth";
+import { createSignedAdminSession, ADMIN_COOKIE_NAME } from "@/lib/auth/homepageAdminSession";
 
 function sanitizeReturnTo(returnTo: unknown): string {
   const v = typeof returnTo === "string" ? returnTo : "/";
@@ -14,24 +12,27 @@ export async function POST(req: Request) {
   const password = String(body.password ?? "").trim();
   const returnTo = sanitizeReturnTo(body.returnTo);
 
-  // Homepage-only admin login (namespaced cookie: homepage_admin_auth).
-  // Intentionally NOT shared with JJ/trading admin auth to avoid cross-service coupling.
-  // Password: HOMEPAGE_ADMIN_PASSWORD in env (see .env.example). Local fallback only if unset.
-  // Use || so empty-string env (common in dashboards) still falls back to default.
   const expected = (process.env.HOMEPAGE_ADMIN_PASSWORD?.trim() || "955104").trim();
   if (password !== expected) {
     return NextResponse.json({ ok: false, error: "비밀번호가 올바르지 않습니다." }, { status: 401 });
   }
 
+  const sessionToken = await createSignedAdminSession();
+  if (!sessionToken) {
+    return NextResponse.json(
+      { ok: false, error: "서버 세션 키(ADMIN_SESSION_SECRET)가 설정되지 않아 세션 생성이 차단되었습니다." },
+      { status: 500 }
+    );
+  }
+
   const res = NextResponse.json({ ok: true, redirectTo: returnTo });
-  res.cookies.set(COOKIE_NAME, "authenticated", {
+  res.cookies.set(ADMIN_COOKIE_NAME, sessionToken, {
     httpOnly: true,
     secure: process.env.NODE_ENV === "production",
     sameSite: "lax",
     path: "/",
-    // Session cookie: cleared when browser session ends (prevents "permanent" pass-through).
+    maxAge: 7 * 24 * 3600
   });
 
   return res;
 }
-

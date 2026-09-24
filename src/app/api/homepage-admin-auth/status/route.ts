@@ -1,12 +1,10 @@
 import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
-
-const COOKIE_NAME = "homepage_admin_auth";
+import { verifyAdminSessionToken, ADMIN_COOKIE_NAME } from "@/lib/auth/homepageAdminSession";
 
 export async function GET() {
   const cookieStore = await cookies();
-  const v = cookieStore.get(COOKIE_NAME)?.value;
-  const authed = v === "authenticated";
+  const token = cookieStore.get(ADMIN_COOKIE_NAME)?.value;
+  const authed = await verifyAdminSessionToken(token);
   return NextResponse.json({ ok: true, authed });
 }
-

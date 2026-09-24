@@ -1,4 +1,5 @@
-﻿import { NextResponse } from "next/server";
+import { NextResponse } from "next/server";
+import { verifyAdminSessionRequest } from "@/lib/auth/homepageAdminSession";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -25,9 +26,17 @@ function readServerConfig() {
 
 /**
  * GET /api/futures-paper/control
- * Returns current tradeControl state from Lightsail API.
+ * Defense-in-depth: Requires valid signed admin session.
  */
-export async function GET() {
+export async function GET(req: Request) {
+  const isAuthorized = await verifyAdminSessionRequest(req);
+  if (!isAuthorized) {
+    return NextResponse.json(
+      { ok: false, error: "Unauthorized: Valid signed admin session required." },
+      { status: 401 }
+    );
+  }
+
   try {
     const cfg = readServerConfig();
     if ("error" in cfg) return cfg.error;
@@ -58,12 +67,17 @@ export async function GET() {
 
 /**
  * POST /api/futures-paper/control
- * Accepts:
- *  - { action: "SET_TRADE", enabled: boolean }
- *  - { action: "SET_LEVERAGE", symbol: "BTCUSDT" | "ETHUSDT", leverage: 10 | 25 | 50 | 100 }
- * Proxies to Lightsail API while preserving existing control state.
+ * Defense-in-depth: Requires valid signed admin session.
  */
 export async function POST(req: Request) {
+  const isAuthorized = await verifyAdminSessionRequest(req);
+  if (!isAuthorized) {
+    return NextResponse.json(
+      { ok: false, error: "Unauthorized: Valid signed admin session required." },
+      { status: 401 }
+    );
+  }
+
   try {
     const cfg = readServerConfig();
     if ("error" in cfg) return cfg.error;
