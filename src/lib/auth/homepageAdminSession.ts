@@ -1,7 +1,7 @@
 const COOKIE_NAME = "homepage_admin_auth";
 
 function getSecretKey(): Uint8Array | null {
-  const secret = process.env.ADMIN_SESSION_SECRET?.trim();
+  const secret = (process.env.ADMIN_SESSION_SECRET || process.env.ADMIN_SECRET_KEY)?.trim();
   if (!secret || secret.length === 0) {
     return null;
   }

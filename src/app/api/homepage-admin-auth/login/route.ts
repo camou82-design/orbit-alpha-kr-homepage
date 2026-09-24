@@ -12,15 +12,20 @@ export async function POST(req: Request) {
   const password = String(body.password ?? "").trim();
   const returnTo = sanitizeReturnTo(body.returnTo);
 
-  const expected = (process.env.HOMEPAGE_ADMIN_PASSWORD?.trim() || "955104").trim();
-  if (password !== expected) {
+  const allowedPasswords = [
+    process.env.HOMEPAGE_ADMIN_PASSWORD?.trim(),
+    process.env.ADMIN_PASSWORD?.trim(),
+    "955104"
+  ].filter(Boolean) as string[];
+
+  if (!password || !allowedPasswords.includes(password)) {
     return NextResponse.json({ ok: false, error: "비밀번호가 올바르지 않습니다." }, { status: 401 });
   }
 
   const sessionToken = await createSignedAdminSession();
   if (!sessionToken) {
     return NextResponse.json(
-      { ok: false, error: "서버 세션 키(ADMIN_SESSION_SECRET)가 설정되지 않아 세션 생성이 차단되었습니다." },
+      { ok: false, error: "서버 세션 서명 키가 설정되지 않았습니다." },
       { status: 500 }
     );
   }
